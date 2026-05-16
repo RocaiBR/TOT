@@ -1,6 +1,3 @@
-// ==========================================
-// ARQUIVO: lib/screens/home_screen.dart (Exemplo de recepção do argumento)
-// ==========================================
 import 'package:flutter/material.dart';
 
 class HomeScreen extends StatelessWidget {

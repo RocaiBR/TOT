@@ -8,68 +8,98 @@ class SplashPage extends StatefulWidget {
   State<SplashPage> createState() => _SplashPageState();
 }
 
-class _SplashPageState extends State<SplashPage>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
+class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
+  late AnimationController _logoController;
+  late Animation<double> _logoFade;
+  late Animation<double> _logoScale;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1200));
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
-    _controller.forward();
+    _logoController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _logoFade = CurvedAnimation(parent: _logoController, curve: Curves.easeIn);
+    _logoScale = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(parent: _logoController, curve: Curves.easeOutBack),
+    );
 
-    Future.delayed(const Duration(milliseconds: 2400), () {
-      if (mounted) Navigator.pushReplacementNamed(context, '/');
+    _logoController.forward();
+
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (mounted) Navigator.pushReplacementNamed(context, '/login');
     });
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _logoController.dispose();
     super.dispose();
+  }
+
+  Widget _buildLogoCard() {
+    return ScaleTransition(
+      scale: _logoScale,
+      child: FadeTransition(
+        opacity: _logoFade,
+        child: Container(
+          width: 260,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF7B1C3D).withOpacity(0.15),
+                blurRadius: 30,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          // Exibe a imagem do logotipo oficial da Pinhalense de forma centralizada
+          child: Image.asset(
+            'assets/logo_pinhalense.png',
+            height: 90,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) {
+              // Fallback caso a imagem local falhe ou o caminho esteja incorreto
+              return const Text(
+                'PINHALENSE',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF7B1C3D),
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.surface,
+      backgroundColor:
+          const Color(0xFF121214), // Fundo escuro elegante para o Splash
       body: Center(
-        child: FadeTransition(
-          opacity: _fadeAnimation,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 120,
-                height: 120,
-                decoration: const BoxDecoration(
-                  color: AppColors.primary,
-                  shape: BoxShape.circle,
-                ),
-                child:
-                    const Icon(Icons.psychology, size: 64, color: Colors.white),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildLogoCard(),
+            const SizedBox(height: 48),
+            const SizedBox(
+              width: 160,
+              child: LinearProgressIndicator(
+                color: Color(0xFF7B1C3D),
+                backgroundColor: Color(0xFF2A2A30),
               ),
-              const SizedBox(height: 24),
-              const Text(
-                'TOT',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2),
-              ),
-              const SizedBox(height: 48),
-              const SizedBox(
-                width: 200,
-                child: LinearProgressIndicator(
-                    color: AppColors.primaryLight,
-                    backgroundColor: AppColors.primaryDark),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

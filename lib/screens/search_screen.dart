@@ -22,20 +22,15 @@ class _SearchScreenState extends State<SearchScreen>
     "Diretrizes de Segurança"
   ];
   List<String> _filteredData = [];
-  late AnimationController _animController;
-  late Animation<Offset> _slideAnimation;
+
+  final bool _isDark = true;
+  Color get _bgColor => _isDark ? AppColors.surface : const Color(0xFFF4F6FA);
+  Color get _cardColor => _isDark ? AppColors.cardDark : Colors.white;
 
   @override
   void initState() {
     super.initState();
     _filteredData = _baseData;
-    _animController = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 500));
-    _slideAnimation =
-        Tween<Offset>(begin: const Offset(0, 0.08), end: Offset.zero).animate(
-            CurvedAnimation(
-                parent: _animController, curve: Curves.easeOutCubic));
-    _animController.forward();
   }
 
   void _filterData(String query) {
@@ -49,46 +44,70 @@ class _SearchScreenState extends State<SearchScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _bgColor,
       appBar: buildGradientAppBar(title: 'Pesquisa na Base TOT'),
-      body: SlideTransition(
-        position: _slideAnimation,
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              TextField(
-                controller: _searchController,
-                onChanged: _filterData,
-                decoration: const InputDecoration(
-                  labelText: 'Buscar projetos, normas...',
-                  prefixIcon: Icon(Icons.search),
-                  border: OutlineInputBorder(),
-                ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchController,
+              onChanged: _filterData,
+              style: TextStyle(color: _isDark ? Colors.white : Colors.black),
+              decoration: InputDecoration(
+                labelText: 'Buscar projetos, normas...',
+                labelStyle: const TextStyle(color: Colors.grey),
+                prefixIcon: const Icon(Icons.search, color: AppColors.primary),
+                filled: true,
+                fillColor: _cardColor,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide.none),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: const BorderSide(color: AppColors.accent)),
               ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: _filteredData.isEmpty
-                    ? const Center(
-                        child: Text("Nenhum projeto encontrado.",
-                            style: TextStyle(color: Colors.grey)))
-                    : ListView.builder(
-                        itemCount: _filteredData.length,
-                        itemBuilder: (context, index) {
-                          return Card(
-                            elevation: 2,
-                            child: ListTile(
-                              leading: const Icon(Icons.folder,
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _filteredData.isEmpty
+                  ? const Center(
+                      child: Text("Nenhum projeto encontrado.",
+                          style: TextStyle(color: Colors.grey)))
+                  : ListView.builder(
+                      itemCount: _filteredData.length,
+                      itemBuilder: (context, index) {
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: _cardColor,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                                color: AppColors.primary.withOpacity(0.2)),
+                          ),
+                          child: ListTile(
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                  color: AppColors.primary.withOpacity(0.15),
+                                  shape: BoxShape.circle),
+                              child: const Icon(Icons.folder,
                                   color: AppColors.primary),
-                              title: Text(_filteredData[index]),
-                              onTap: () =>
-                                  Navigator.pushNamed(context, '/details'),
                             ),
-                          );
-                        },
-                      ),
-              )
-            ],
-          ),
+                            title: Text(_filteredData[index],
+                                style: TextStyle(
+                                    color:
+                                        _isDark ? Colors.white : Colors.black)),
+                            trailing: const Icon(Icons.arrow_forward_ios,
+                                size: 14, color: Colors.grey),
+                            onTap: () =>
+                                Navigator.pushNamed(context, '/details'),
+                          ),
+                        );
+                      },
+                    ),
+            )
+          ],
         ),
       ),
     );

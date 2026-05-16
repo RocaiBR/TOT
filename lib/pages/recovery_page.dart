@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../app_theme.dart';
 
 class RecoveryPage extends StatefulWidget {
@@ -10,9 +11,11 @@ class RecoveryPage extends StatefulWidget {
 
 class _RecoveryPageState extends State<RecoveryPage> {
   final TextEditingController _emailController = TextEditingController();
+  bool _isLoading = false;
 
-  void _recoverPassword() {
+  Future<void> _recoverPassword() async {
     final email = _emailController.text.trim();
+
     if (email.isEmpty || !email.contains('@')) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -22,16 +25,53 @@ class _RecoveryPageState extends State<RecoveryPage> {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('E-mail de recuperação enviado com sucesso!'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    setState(() => _isLoading = true);
 
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) Navigator.pop(context);
-    });
+    try {
+      // Envia o e-mail real através do Firebase
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      // Aguarda 2 segundos e volta para a tela de Login
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) Navigator.pop(context);
+      });
+    } on FirebaseAuthException catch (e) {
+      String mensagemErro = 'Ocorreu um erro ao tentar recuperar a senha.';
+
+      // Tratamentos de erros amigáveis para o usuário
+      if (e.code == 'user-not-found') {
+        mensagemErro = 'Este e-mail não está cadastrado no sistema.';
+      } else if (e.code == 'invalid-email') {
+        mensagemErro = 'O formato do e-mail digitado é inválido.';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(mensagemErro),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
   }
 
   @override
@@ -62,10 +102,23 @@ class _RecoveryPageState extends State<RecoveryPage> {
             ),
             const SizedBox(height: 32),
             AnimatedPressButton(
-              onPressed: _recoverPassword,
-              child: const Text('ENVIAR LINK',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
+              onPressed: _isLoading ? () {} : () => _recoverPassword(),
+              child: _isLoading
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Text(
+                      'ENVIAR LINK',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           ],
         ),
