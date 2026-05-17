@@ -15,6 +15,7 @@ import 'pages/profile_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/details_page.dart';
 import 'pages/marcelaoparte.dart';
+import 'pages/admin_banco_page.dart'; // ← novo
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,8 +33,6 @@ class TotApp extends StatelessWidget {
     return MaterialApp(
       title: 'Tot - Assistente Interno',
       debugShowCheckedModeBanner: false,
-
-      // Tema Material 3 com a paleta Vinho definida no app_theme.dart
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -43,16 +42,11 @@ class TotApp extends StatelessWidget {
         primaryColor: AppColors.primary,
         scaffoldBackgroundColor: AppColors.surface,
       ),
-
       initialRoute: '/splash',
-
       routes: {
-        // Rotas Base
         '/': (context) => const LoginScreen(),
         '/home_screen': (context) => const HomeScreen(),
         '/register': (context) => const RegisterPage(),
-
-        // Rotas de Expansão
         '/splash': (context) => const SplashPage(),
         '/home': (context) => const HomePage(),
         '/faq': (context) => const FaqPage(),
@@ -63,9 +57,8 @@ class TotApp extends StatelessWidget {
         '/marcela_login': (context) => const MarcelaLoginPage(),
         '/search_screen': (context) => const SearchScreen(),
         '/faq_screen': (context) => const FaqScreen(),
+        '/admin_banco': (context) => const AdminBancoPage(), // ← novo
       },
-
-      // Roteamento defensivo com efeito de esmaecer (Fade)
       onGenerateRoute: (settings) {
         return PageRouteBuilder(
           settings: settings,

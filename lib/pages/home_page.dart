@@ -4,10 +4,12 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../utils/ia_service.dart';
 
 class ChatMessage {
   final String sender;
@@ -39,7 +41,6 @@ class _HomePageState extends State<HomePage> {
   ];
 
   bool _isDark = true;
-
   XFile? _selectedImage;
   bool _isUploading = false;
   final ImagePicker _picker = ImagePicker();
@@ -48,9 +49,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final XFile? image = await _picker.pickImage(source: source);
       if (image == null) return;
-      setState(() {
-        _selectedImage = image;
-      });
+      setState(() => _selectedImage = image);
       Navigator.pop(context);
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -110,33 +109,37 @@ class _HomePageState extends State<HomePage> {
     if (text.isEmpty && _selectedImage == null) return;
 
     String? uploadedImageUrl;
+    Uint8List? imageBytesToIA;
+
+    setState(() {
+      _messages.add(ChatMessage(
+        sender: 'Você',
+        text: text,
+        imageUrl: _selectedImage?.path,
+      ));
+      _isUploading = true;
+    });
 
     if (_selectedImage != null) {
-      setState(() => _isUploading = true);
-
       try {
+        if (kIsWeb) {
+          imageBytesToIA = await _selectedImage!.readAsBytes();
+        } else {
+          imageBytesToIA = await File(_selectedImage!.path).readAsBytes();
+        }
+
         const String cloudName = 'dn2vlkwuf';
         const String uploadPreset = 'TOT_CHAT';
 
         final url = Uri.parse(
             'https://api.cloudinary.com/v1_1/$cloudName/image/upload');
-
         final request = http.MultipartRequest('POST', url);
         request.fields['upload_preset'] = uploadPreset;
-
-        if (kIsWeb) {
-          final bytes = await _selectedImage!.readAsBytes();
-          request.files.add(http.MultipartFile.fromBytes(
-            'file',
-            bytes,
-            filename: _selectedImage!.name,
-          ));
-        } else {
-          request.files.add(await http.MultipartFile.fromPath(
-            'file',
-            _selectedImage!.path,
-          ));
-        }
+        request.files.add(http.MultipartFile.fromBytes(
+          'file',
+          imageBytesToIA,
+          filename: _selectedImage!.name,
+        ));
 
         final response = await request.send();
 
@@ -156,47 +159,142 @@ class _HomePageState extends State<HomePage> {
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Erro ao enviar imagem para o Cloudinary: $e'),
-              backgroundColor: Colors.red),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text('Erro ao processar imagem: $e'),
+                backgroundColor: Colors.red),
+          );
+        }
         setState(() => _isUploading = false);
         return;
       }
     }
 
     setState(() {
-      _messages.add(ChatMessage(
-        sender: 'Você',
-        text: text,
-        imageUrl: uploadedImageUrl,
-      ));
       _selectedImage = null;
       _isUploading = false;
       _chatController.clear();
     });
 
-    Future.delayed(const Duration(milliseconds: 600), () {
+    if (imageBytesToIA != null) {
       setState(() {
-        _messages.add(ChatMessage(
-          sender: 'TOT',
-          text: 'Imagem recebida com sucesso',
-        ));
+        _messages.add(
+            ChatMessage(sender: 'TOT', text: 'Analisando imagem com IA...'));
       });
-    });
+
+      try {
+        final snapshot =
+            await FirebaseFirestore.instance.collection('banco_imagens').get();
+
+        if (snapshot.docs.isEmpty) {
+          if (mounted) {
+            setState(() {
+              _messages.removeLast();
+              _messages.add(ChatMessage(
+                sender: 'TOT',
+                text:
+                    'O banco de imagens está vazio. Adicione imagens de referência primeiro.',
+              ));
+            });
+          }
+          return;
+        }
+
+        final List<Map<String, dynamic>> imagensBanco = [];
+        for (var doc in snapshot.docs) {
+          final dados = doc.data();
+          if (!dados.containsKey('imageUrl')) continue;
+          try {
+            final imgRes = await http
+                .get(Uri.parse(dados['imageUrl']))
+                .timeout(const Duration(seconds: 15));
+            if (imgRes.statusCode == 200) {
+              imagensBanco.add({
+                'imageUrl': dados['imageUrl'],
+                'bytes': imgRes.bodyBytes,
+              });
+            }
+          } catch (e) {
+            print('Erro ao baixar imagem do banco: $e');
+          }
+        }
+
+        if (imagensBanco.isEmpty) {
+          if (mounted) {
+            setState(() {
+              _messages.removeLast();
+              _messages.add(ChatMessage(
+                sender: 'TOT',
+                text:
+                    'Não consegui acessar as imagens do banco. Verifique a conexão.',
+              ));
+            });
+          }
+          return;
+        }
+
+        final resultado = await IaService.analisarComContexto(
+          imagemUsuario: imageBytesToIA,
+          imagensBanco: imagensBanco,
+          textoUsuario: text.isNotEmpty ? text : 'análise de imagem',
+        );
+
+        if (mounted) {
+          setState(() {
+            _messages.removeLast();
+            if (resultado == null) {
+              _messages.add(ChatMessage(
+                sender: 'TOT',
+                text: 'Não consegui processar a imagem. Tente novamente.',
+              ));
+            } else if (resultado.containsKey('erro')) {
+              _messages.add(ChatMessage(
+                sender: 'TOT',
+                text: '⚠️ ${resultado['erro']}',
+              ));
+            } else {
+              _messages.add(ChatMessage(
+                sender: 'TOT',
+                text: resultado['mensagem'] as String,
+                imageUrl: resultado['imageUrl'] as String?,
+              ));
+            }
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _messages.removeLast();
+            _messages.add(ChatMessage(
+              sender: 'TOT',
+              text: 'Erro ao analisar imagem: $e',
+            ));
+          });
+        }
+      }
+    } else if (text.isNotEmpty) {
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) {
+          setState(() {
+            _messages.add(ChatMessage(
+              sender: 'TOT',
+              text:
+                  'Para ativar a busca preditiva, anexe uma imagem usando o ícone de clipe.',
+            ));
+          });
+        }
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // ── Cores adaptadas ao modo ──────────────────────────────────────────────
     final bgColor = _isDark ? AppColors.surface : const Color(0xFFF7F3F5);
     final textColor = _isDark ? AppColors.textPrimary : const Color(0xFF1C0F18);
 
     return Theme(
-      data: Theme.of(context).copyWith(
-        scaffoldBackgroundColor: bgColor,
-      ),
+      data: Theme.of(context).copyWith(scaffoldBackgroundColor: bgColor),
       child: Scaffold(
         appBar: buildGradientAppBar(title: 'CHAT'),
         drawer: Drawer(
@@ -225,6 +323,13 @@ class _HomePageState extends State<HomePage> {
                     style: TextStyle(color: AppColors.textPrimary)),
                 onTap: () => Navigator.pushNamed(context, '/faq'),
               ),
+              ListTile(
+                leading: const Icon(Icons.photo_library,
+                    color: AppColors.textPrimary),
+                title: const Text('Banco de Imagens',
+                    style: TextStyle(color: AppColors.textPrimary)),
+                onTap: () => Navigator.pushNamed(context, '/admin_banco'),
+              ),
               SwitchListTile(
                 title: const Text('Modo Escuro',
                     style: TextStyle(color: AppColors.textPrimary)),
@@ -245,7 +350,6 @@ class _HomePageState extends State<HomePage> {
                   final msg = _messages[index];
                   final isUser = msg.sender == 'Você';
 
-                  // ── Cor das bolhas adaptada ao modo ──────────────────────
                   final bubbleColor = isUser
                       ? (_isDark
                           ? AppColors.primaryLight.withOpacity(0.2)
@@ -278,18 +382,33 @@ class _HomePageState extends State<HomePage> {
                               padding: const EdgeInsets.only(bottom: 8.0),
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  msg.imageUrl!,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      const Text('[Erro ao carregar imagem]',
-                                          style: TextStyle(color: Colors.red)),
-                                ),
+                                child: (kIsWeb ||
+                                        msg.imageUrl!.startsWith('http'))
+                                    ? Image.network(
+                                        msg.imageUrl!,
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) =>
+                                                const Text(
+                                                    '[Erro ao carregar imagem]',
+                                                    style: TextStyle(
+                                                        color: Colors.red)),
+                                      )
+                                    : Image.file(
+                                        File(msg.imageUrl!),
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) =>
+                                                const Text(
+                                                    '[Erro ao carregar imagem]',
+                                                    style: TextStyle(
+                                                        color: Colors.red)),
+                                      ),
                               ),
                             ),
                           if (msg.text.isNotEmpty)
                             Text(
-                              "${msg.sender}: ${msg.text}",
+                              '${msg.sender}: ${msg.text}',
                               style: TextStyle(color: textColor),
                             ),
                         ],
@@ -299,8 +418,6 @@ class _HomePageState extends State<HomePage> {
                 },
               ),
             ),
-
-            // ── Preview da imagem selecionada ────────────────────────────────
             if (_selectedImage != null)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -350,8 +467,6 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               ),
-
-            // ── Campo de texto ───────────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.all(8.0),
               child: Row(
