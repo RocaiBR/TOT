@@ -13,9 +13,15 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   late Animation<double> _logoFade;
   late Animation<double> _logoScale;
 
+  late AnimationController _nomeController;
+  late Animation<double> _nomeFade;
+  late Animation<Offset> _nomeSlide;
+
   @override
   void initState() {
     super.initState();
+
+    // Animação do logo (igual antes)
     _logoController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
@@ -25,7 +31,24 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       CurvedAnimation(parent: _logoController, curve: Curves.easeOutBack),
     );
 
+    // Animação do nome da empresa (entra logo depois do logo)
+    _nomeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _nomeFade = CurvedAnimation(parent: _nomeController, curve: Curves.easeIn);
+    _nomeSlide = Tween<Offset>(
+      begin: const Offset(0, 0.4),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(parent: _nomeController, curve: Curves.easeOut),
+    );
+
     _logoController.forward();
+    // Pequeno atraso pra o nome aparecer depois do logo
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) _nomeController.forward();
+    });
 
     Future.delayed(const Duration(milliseconds: 2500), () {
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
@@ -35,6 +58,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   @override
   void dispose() {
     _logoController.dispose();
+    _nomeController.dispose();
     super.dispose();
   }
 
@@ -57,13 +81,11 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
               ),
             ],
           ),
-          // Exibe a imagem do logotipo oficial da Pinhalense de forma centralizada
           child: Image.asset(
-            'assets/logo_pinhalense.png',
+            'assets/images/logo.png',
             height: 90,
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) {
-              // Fallback caso a imagem local falhe ou o caminho esteja incorreto
               return const Text(
                 'PINHALENSE',
                 textAlign: TextAlign.center,
@@ -81,17 +103,49 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildNomeEmpresa() {
+    return SlideTransition(
+      position: _nomeSlide,
+      child: FadeTransition(
+        opacity: _nomeFade,
+        child: Column(
+          children: const [
+            Text(
+              'PINHALENSE',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 4,
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'Auxílio de pesquisa e automatização',
+              style: TextStyle(
+                color: Color(0xFFBFA0AD),
+                fontSize: 13,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          const Color(0xFF121214), // Fundo escuro elegante para o Splash
+      backgroundColor: const Color(0xFF121214),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _buildLogoCard(),
-            const SizedBox(height: 48),
+            const SizedBox(height: 28),
+            _buildNomeEmpresa(),
+            const SizedBox(height: 40),
             const SizedBox(
               width: 160,
               child: LinearProgressIndicator(

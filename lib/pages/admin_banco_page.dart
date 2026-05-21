@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import '../app_theme.dart';
 
 class AdminBancoPage extends StatefulWidget {
@@ -34,6 +33,23 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
     });
   }
 
+  /// Deduz o content-type a partir da extensão do arquivo.
+  String _contentTypeFromName(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : 'jpg';
+    switch (ext) {
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'jpg':
+      case 'jpeg':
+      default:
+        return 'image/jpeg';
+    }
+  }
+
   Future<void> _adicionarImagem() async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
@@ -41,51 +57,51 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
     setState(() => _isUploading = true);
 
     try {
-      // Lê os bytes
+      // Lê os bytes da imagem
       final bytes = kIsWeb
           ? await image.readAsBytes()
           : await File(image.path).readAsBytes();
 
-      // Sobe para o Cloudinary
-      const String cloudName = 'dn2vlkwuf';
-      const String uploadPreset = 'TOT_CHAT';
+      // Sobe para o Firebase Storage
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final storagePath = 'banco_imagens/${timestamp}_${image.name}';
 
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('https://api.cloudinary.com/v1_1/$cloudName/image/upload'),
-      );
-      request.fields['upload_preset'] = uploadPreset;
-      request.files.add(http.MultipartFile.fromBytes(
-        'file',
+      final ref = FirebaseStorage.instance.ref(storagePath);
+      final uploadTask = await ref.putData(
         bytes,
-        filename: image.name,
-      ));
+        SettableMetadata(contentType: _contentTypeFromName(image.name)),
+      );
 
-      final response = await request.send();
+      // URL pública (com token) que serve para <Image.network>
+      final imageUrl = await uploadTask.ref.getDownloadURL();
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(await response.stream.bytesToString());
-        final imageUrl = data['secure_url'] as String;
+      // Salva no Firestore. storagePath é importante porque permite
+      // baixar via SDK do Firebase (sem problemas de CORS no web).
+      await FirebaseFirestore.instance.collection('banco_imagens').add({
+        'imageUrl': imageUrl,
+        'storagePath': storagePath,
+        'nome': image.name,
+        'adicionadoEm': DateTime.now().toIso8601String(),
+      });
 
-        // Salva a URL no Firestore
-        await FirebaseFirestore.instance.collection('banco_imagens').add({
-          'imageUrl': imageUrl,
-          'nome': image.name,
-          'adicionadoEm': DateTime.now().toIso8601String(),
-        });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Imagem adicionada ao banco com sucesso!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Imagem adicionada ao banco com sucesso!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-
-        await _carregarBanco();
-      } else {
-        throw Exception('Erro Cloudinary: ${response.statusCode}');
+      await _carregarBanco();
+    } on FirebaseException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro Firebase Storage: ${e.code} — ${e.message}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -101,7 +117,20 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
     }
   }
 
-  Future<void> _removerImagem(String docId) async {
+  Future<void> _removerImagem(Map<String, dynamic> img) async {
+    final docId = img['id'] as String;
+
+    // Tenta apagar o arquivo do Storage também (se houver storagePath salvo)
+    final storagePath = img['storagePath'] as String?;
+    if (storagePath != null && storagePath.isNotEmpty) {
+      try {
+        await FirebaseStorage.instance.ref(storagePath).delete();
+      } catch (e) {
+        // O arquivo pode não existir mais — não bloqueia a remoção do doc
+        print('[banco_imagens] aviso ao remover do Storage: $e');
+      }
+    }
+
     await FirebaseFirestore.instance
         .collection('banco_imagens')
         .doc(docId)
@@ -193,7 +222,7 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
                             top: 4,
                             right: 4,
                             child: GestureDetector(
-                              onTap: () => _removerImagem(img['id']),
+                              onTap: () => _removerImagem(img),
                               child: Container(
                                 decoration: const BoxDecoration(
                                   color: Colors.red,

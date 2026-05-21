@@ -3,7 +3,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'app_theme.dart';
 import 'screens/login_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/faq_screen.dart';
 import 'pages/register_page.dart';
@@ -15,7 +14,7 @@ import 'pages/profile_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/details_page.dart';
 import 'pages/marcelaoparte.dart';
-import 'pages/admin_banco_page.dart'; // ← novo
+import 'pages/admin_banco_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,7 +44,7 @@ class TotApp extends StatelessWidget {
       initialRoute: '/splash',
       routes: {
         '/': (context) => const LoginScreen(),
-        '/home_screen': (context) => const HomeScreen(),
+        '/home_screen': (context) => const HomePage(),
         '/register': (context) => const RegisterPage(),
         '/splash': (context) => const SplashPage(),
         '/home': (context) => const HomePage(),
@@ -57,7 +56,7 @@ class TotApp extends StatelessWidget {
         '/marcela_login': (context) => const MarcelaLoginPage(),
         '/search_screen': (context) => const SearchScreen(),
         '/faq_screen': (context) => const FaqScreen(),
-        '/admin_banco': (context) => const AdminBancoPage(), // ← novo
+        '/admin_banco': (context) => const AdminBancoPage(),
       },
       onGenerateRoute: (settings) {
         return PageRouteBuilder(

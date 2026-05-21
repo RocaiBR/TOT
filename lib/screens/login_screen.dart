@@ -7,7 +7,7 @@ import '../app_theme.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
-  // @override
+  @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
@@ -17,6 +17,10 @@ class _LoginScreenState extends State<LoginScreen> {
   final _senhaController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
+
+  // ── Credenciais do "atalho admin" (login real no Firebase nos bastidores) ──
+  static const String _adminEmailReal = 'admin@tot.com';
+  static const String _adminSenhaReal = 'admin123';
 
   // ── Cores dinâmicas (segue o tema do sistema) ─────────────────────────────
   bool get _isDark =>
@@ -40,12 +44,43 @@ class _LoginScreenState extends State<LoginScreen> {
     final emailInput = _emailController.text.trim();
     final senhaInput = _senhaController.text;
 
+    // ── Atalho admin: traduz "admin/123" para login real no Firebase ───────
     if (emailInput == 'admin' && senhaInput == '123') {
-      Navigator.pushReplacementNamed(context, '/home',
-          arguments: 'Administrador');
+      setState(() => _isLoading = true);
+      try {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: _adminEmailReal,
+          password: _adminSenhaReal,
+        );
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/home',
+              arguments: 'Administrador');
+        }
+      } on FirebaseAuthException catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro no login admin: ${e.code}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro no login admin: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
       return;
     }
 
+    // ── Login normal de usuário ────────────────────────────────────────────
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);

@@ -3,51 +3,60 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 class IaService {
-  static const String _geminiKey = String.fromEnvironment(
-    'GEMINI_API_KEY', // ← o NOME da variável, não a chave
+  static const String _groqKey = String.fromEnvironment(
+    'GROQ_API_KEY',
     defaultValue: '',
   );
 
   static const String _apiUrl =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+      'https://api.groq.com/openai/v1/chat/completions';
+
+  // Modelo multimodal do Groq (visão + texto)
+  static const String _model = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
   static Future<Map<String, dynamic>?> analisarComContexto({
     required Uint8List imagemUsuario,
     required List<Map<String, dynamic>> imagensBanco,
     required String textoUsuario,
   }) async {
-    if (_geminiKey.isEmpty) {
-      print('[IaService] GEMINI_API_KEY não configurada!');
+    if (_groqKey.isEmpty) {
+      print('[IaService] GROQ_API_KEY não configurada!');
       return {
         'erro':
-            'Chave da API não configurada. Rode com --dart-define=GEMINI_API_KEY=sua_chave'
+            'Chave da API não configurada. Rode com --dart-define=GROQ_API_KEY=sua_chave'
+      };
+    }
+
+    if (imagensBanco.isEmpty) {
+      return {
+        'erro':
+            'Banco de imagens vazio. Adicione imagens de referência primeiro.'
       };
     }
 
     try {
-      if (imagensBanco.isEmpty) {
-        return {
-          'erro':
-              'Banco de imagens vazio. Adicione imagens de referência primeiro.'
-        };
-      }
+      // 1)Limita a 3 imagens do banco
+      final bancoParcial =
+          imagensBanco.length > 3 ? imagensBanco.sublist(0, 3) : imagensBanco;
 
-      final parts = <Map<String, dynamic>>[];
+      final content = <Map<String, dynamic>>[];
 
-      parts.add({
+      content.add({
+        'type': 'text',
         'text': '''
 O usuário enviou uma imagem com o seguinte contexto: "$textoUsuario".
 
-A primeira imagem abaixo é a do usuário.
-Compare-a visualmente com as imagens do banco numeradas a seguir.
+A PRIMEIRA imagem abaixo é a do usuário.
+As imagens seguintes são do banco, numeradas de 1 a ${bancoParcial.length}.
+Compare visualmente a imagem do usuário com cada imagem do banco e decida qual é a mais similar.
 
-Responda APENAS E EXCLUSIVAMENTE com um JSON neste formato exato:
+Responda APENAS com um JSON neste formato exato:
 {
-  "indice": <número da imagem do banco mais similar, começando em 1>,
+  "indice": <número da imagem do banco mais similar, 1 a ${bancoParcial.length}>,
   "mensagem": "<frase curta confirmando a sugestão>"
 }
 
-Se nenhuma imagem for suficientemente similar, responda:
+Se nenhuma imagem for suficientemente similar, retorne:
 {
   "indice": 0,
   "mensagem": "Não encontrei correspondência no banco para este pedido."
@@ -55,48 +64,57 @@ Se nenhuma imagem for suficientemente similar, responda:
 '''
       });
 
-      // Imagem do usuário em base64
-      parts.add({
-        'inlineData': {
-          'mimeType': 'image/jpeg',
-          'data': base64Encode(imagemUsuario),
+      // 2) Imagem do usuário (Uint8List → data URL base64)
+      final usuarioBase64 = base64Encode(imagemUsuario);
+      content.add({
+        'type': 'image_url',
+        'image_url': {
+          'url': 'data:image/jpeg;base64,$usuarioBase64',
         }
       });
 
-      final bancoParcial =
-          imagensBanco.length > 3 ? imagensBanco.sublist(0, 3) : imagensBanco;
-
+      // 3) Imagens do banco — manda direto a URL do Firebase Storage
       for (int i = 0; i < bancoParcial.length; i++) {
-        parts.add({'text': 'Imagem do banco ${i + 1}:'});
+        final url = bancoParcial[i]['imageUrl'] as String?;
+        if (url == null) continue;
 
-        // ✅ CORREÇÃO: usa bytes baixados (inlineData) ao invés de URL externa
-        final imageBytes = bancoParcial[i]['bytes'] as Uint8List?;
-        if (imageBytes != null) {
-          parts.add({
-            'inlineData': {
-              'mimeType': 'image/jpeg',
-              'data': base64Encode(imageBytes),
-            }
-          });
-        }
+        content.add({
+          'type': 'text',
+          'text': 'Imagem do banco ${i + 1}:',
+        });
+        content.add({
+          'type': 'image_url',
+          'image_url': {'url': url},
+        });
       }
 
-      print(
-          '[IaService] Enviando para o Gemini com ${bancoParcial.length} imagem(ns)...');
-
       final requestBody = jsonEncode({
-        'contents': [
-          {'parts': parts}
-        ]
+        'model': _model,
+        'messages': [
+          {
+            'role': 'user',
+            'content': content,
+          }
+        ],
+        'temperature': 0.2,
+        'max_completion_tokens': 300,
+        'response_format': {'type': 'json_object'},
       });
 
       print(
+          '[IaService] Enviando para o Groq com ${bancoParcial.length} imagem(ns)...');
+      print(
           '[IaService] Payload: ${(requestBody.length / 1024).toStringAsFixed(1)} KB');
+      print(
+          '[IaService] Chave usada: ${_groqKey.substring(0, 8)}...${_groqKey.substring(_groqKey.length - 4)} (total: ${_groqKey.length} chars)');
 
       final response = await http
           .post(
-            Uri.parse('$_apiUrl?key=$_geminiKey'),
-            headers: {'Content-Type': 'application/json'},
+            Uri.parse(_apiUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $_groqKey',
+            },
             body: requestBody,
           )
           .timeout(const Duration(seconds: 60));
@@ -106,35 +124,26 @@ Se nenhuma imagem for suficientemente similar, responda:
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
 
-        if (decoded['candidates'] == null ||
-            (decoded['candidates'] as List).isEmpty) {
-          return {
-            'erro': 'Gemini não retornou candidatos. Resposta: ${response.body}'
-          };
+        final choices = decoded['choices'] as List?;
+        if (choices == null || choices.isEmpty) {
+          return {'erro': 'Groq não retornou choices: ${response.body}'};
         }
 
-        final textoBruto =
-            decoded['candidates'][0]['content']['parts'][0]['text'] as String;
+        final textoBruto = choices[0]['message']['content'] as String;
 
         print('[IaService] Resposta: $textoBruto');
 
-        final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(textoBruto);
+        final json = jsonDecode(textoBruto);
+        final indice = (json['indice'] as num).toInt();
+        final mensagem = json['mensagem'] as String;
 
-        if (jsonMatch != null) {
-          final json = jsonDecode(jsonMatch.group(0)!);
-          final indice = json['indice'] as int;
-          final mensagem = json['mensagem'] as String;
-
-          if (indice >= 1 && indice <= bancoParcial.length) {
-            return {
-              'imageUrl': bancoParcial[indice - 1]['imageUrl'] as String,
-              'mensagem': mensagem,
-            };
-          } else {
-            return {'imageUrl': null, 'mensagem': mensagem};
-          }
+        if (indice >= 1 && indice <= bancoParcial.length) {
+          return {
+            'imageUrl': bancoParcial[indice - 1]['imageUrl'] as String,
+            'mensagem': mensagem,
+          };
         } else {
-          return {'erro': 'Resposta inesperada do Gemini: $textoBruto'};
+          return {'imageUrl': null, 'mensagem': mensagem};
         }
       } else {
         String mensagemErro;
@@ -142,10 +151,10 @@ Se nenhuma imagem for suficientemente similar, responda:
           final erroJson = jsonDecode(response.body);
           mensagemErro = erroJson['error']?['message'] ?? 'Erro desconhecido';
         } catch (_) {
-          mensagemErro = 'HTTP ${response.statusCode}';
+          mensagemErro = 'HTTP ${response.statusCode}: ${response.body}';
         }
         print('[IaService] Erro: $mensagemErro');
-        return {'erro': 'Erro Gemini: $mensagemErro'};
+        return {'erro': 'Erro Groq: $mensagemErro'};
       }
     } catch (e) {
       print('[IaService] Exceção: $e');
