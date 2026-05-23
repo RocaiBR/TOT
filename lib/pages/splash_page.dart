@@ -9,21 +9,17 @@ class SplashPage extends StatefulWidget {
 }
 
 class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
-  // Logo
   late AnimationController _logoCtrl;
   late Animation<double> _logoFade;
   late Animation<double> _logoScale;
   late Animation<double> _logoY;
 
-  // Textos / tagline
   late AnimationController _textCtrl;
   late Animation<double> _textFade;
 
-  // Linha brilhante
   late AnimationController _lineCtrl;
   late Animation<double> _lineWidth;
 
-  // Brilho pulsante
   late AnimationController _pulseCtrl;
   late Animation<double> _pulse;
 
@@ -31,7 +27,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
 
-    // 1. Logo
     _logoCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 900));
     _logoFade = CurvedAnimation(parent: _logoCtrl, curve: Curves.easeOut);
@@ -40,25 +35,21 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     _logoY = Tween<double>(begin: 24.0, end: 0.0).animate(
         CurvedAnimation(parent: _logoCtrl, curve: Curves.easeOutCubic));
 
-    // 2. Texto
     _textCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 600));
     _textFade = CurvedAnimation(parent: _textCtrl, curve: Curves.easeIn);
 
-    // 3. Linha
     _lineCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 800));
     _lineWidth = Tween<double>(begin: 0.0, end: 1.0).animate(
         CurvedAnimation(parent: _lineCtrl, curve: Curves.easeOutCubic));
 
-    // 4. Pulso (loop infinito)
     _pulseCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1600))
       ..repeat(reverse: true);
     _pulse = Tween<double>(begin: 0.55, end: 1.0)
         .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
-    // Sequência de entrada: logo → linha → texto
     _logoCtrl.forward().then((_) async {
       await Future.delayed(const Duration(milliseconds: 80));
       if (mounted) _lineCtrl.forward();
@@ -66,7 +57,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       if (mounted) _textCtrl.forward();
     });
 
-    // Navegar para login após 2,5 s (mantém o tempo original)
+    // Navegar para login após 2,5 s
     Future.delayed(const Duration(milliseconds: 2500), () {
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
     });
@@ -88,10 +79,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // ── FUNDO: grade de pontos ──────────────────────────────
+          //  FUNDO: grade de pontos ─
           CustomPaint(painter: _DotGridPainter()),
 
-          // ── BRILHO CENTRAL PULSANTE ─────────────────────────────
+          //  BRILHO CENTRAL PULSANTE
           AnimatedBuilder(
             animation: _pulse,
             builder: (_, __) => Center(
@@ -111,7 +102,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
             ),
           ),
 
-          // ── CONTEÚDO CENTRAL ────────────────────────────────────
+          // CONTEÚDO CENTRAL
           Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -200,7 +191,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
             ),
           ),
 
-          // ── VERSÃO (canto inferior) ─────────────────────────────
+          // ── VERSÃO (canto inferior)
           Positioned(
             bottom: 28,
             left: 0,

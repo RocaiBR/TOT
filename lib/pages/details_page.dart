@@ -61,7 +61,7 @@ class DetailsPage extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Text(
-                'Placeholder: A integração com a base de dados real será implementada em atualizações futuras para exibição dinâmica dos dados técnicos da obra.',
+                'A integração com a base de dados real será implementada em atualizações futuras para exibição dinâmica dos dados técnicos da obra.',
                 style: TextStyle(fontStyle: FontStyle.italic),
               ),
             ),

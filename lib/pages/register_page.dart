@@ -18,7 +18,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _senhaController = TextEditingController();
   bool _isLoading = false;
 
-  // ── Cores dinâmicas baseadas no padrão estilizado ─────────────────────────
+  // Cores dinâmicas baseadas no padrão estilizado
   final bool _isDark = true;
   Color get _bgColor => _isDark ? AppColors.surface : const Color(0xFFF4F6FA);
   Color get _textColor =>

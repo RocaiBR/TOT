@@ -46,11 +46,6 @@ class ConversaSalva {
   }
 }
 
-/// Serviço estático que gerencia conversas salvas no Firestore por usuário logado.
-///
-/// Estrutura no Firestore:
-///   usuarios/{userId}/conversas/{chatId}            → metadados da conversa
-///   usuarios/{userId}/conversas/{chatId}/mensagens  → mensagens em ordem cronológica
 class ChatStorage {
   static String? get _userId => FirebaseAuth.instance.currentUser?.uid;
 
@@ -123,7 +118,6 @@ class ChatStorage {
   }
 
   /// Adiciona uma mensagem à conversa e atualiza preview/título conforme o caso.
-  ///
   /// Se [tituloSeNovo] for fornecido, o título da conversa será atualizado
   /// (útil para definir o título a partir da primeira mensagem do usuário).
   static Future<void> adicionarMensagem(
@@ -194,7 +188,7 @@ class ChatStorage {
     await docRef.delete();
   }
 
-  // ── Helpers internos ──────────────────────────────────────────────────────
+  //  Helpers internos
 
   static String _gerarPrevia(ChatMessage msg) {
     final base = msg.text.trim();

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'app_theme.dart';
+import 'theme_notifier.dart'; // ← importa do arquivo dedicado
 import 'screens/login_screen.dart';
 import 'screens/search_screen.dart';
 import 'screens/faq_screen.dart';
@@ -24,23 +25,60 @@ void main() async {
   runApp(const TotApp());
 }
 
-class TotApp extends StatelessWidget {
+class TotApp extends StatefulWidget {
   const TotApp({super.key});
+
+  @override
+  State<TotApp> createState() => _TotAppState();
+}
+
+class _TotAppState extends State<TotApp> {
+  @override
+  void initState() {
+    super.initState();
+    themeNotifier.addListener(_onThemeChange);
+  }
+
+  @override
+  void dispose() {
+    themeNotifier.removeListener(_onThemeChange);
+    super.dispose();
+  }
+
+  void _onThemeChange() => setState(() {});
+
+  // ── Tema escuro (original) ─────────────────────────────────────────────────
+  static final ThemeData _dark = ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: AppColors.primary,
+      brightness: Brightness.dark,
+    ),
+    primaryColor: AppColors.primary,
+    scaffoldBackgroundColor: AppColors.surface,
+  );
+
+  // ── Tema claro ─────────────────────────────────────────────────────────────
+  static final ThemeData _light = ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: AppColors.primary,
+      brightness: Brightness.light,
+    ),
+    primaryColor: AppColors.primary,
+    scaffoldBackgroundColor: const Color(0xFFF5EEF1),
+    cardColor: const Color(0xFFFFFFFF),
+    dividerColor: const Color(0xFFE0D0D8),
+  );
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Tot - Assistente Interno',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.primary,
-          brightness: Brightness.dark,
-        ),
-        primaryColor: AppColors.primary,
-        scaffoldBackgroundColor: AppColors.surface,
-      ),
+      theme: _light,
+      darkTheme: _dark,
+      themeMode: themeNotifier.value,
       initialRoute: '/splash',
       routes: {
         '/': (context) => const LoginScreen(),

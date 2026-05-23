@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../app_theme.dart';
+import '../theme_notifier.dart'; // ← sem importação circular
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -10,10 +11,12 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _notificationsEnabled = true;
-  bool _darkModeEnabled = true;
 
-  // ── Cores dinâmicas ─────────────────────────
-  final bool _isDark = true;
+  // Lê o tema atual do notifier global
+  bool get _darkModeEnabled => themeNotifier.value == ThemeMode.dark;
+
+  // Cores dinâmicas — reagem ao tema real
+  bool get _isDark => _darkModeEnabled;
   Color get _bgColor => _isDark ? AppColors.surface : const Color(0xFFF4F6FA);
   Color get _cardColor => _isDark ? AppColors.cardDark : Colors.white;
   Color get _textColor =>
@@ -75,7 +78,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: Text('Modo Escuro', style: TextStyle(color: _textColor)),
                 value: _darkModeEnabled,
                 activeColor: AppColors.accent,
-                onChanged: (val) => setState(() => _darkModeEnabled = val),
+                onChanged: (val) {
+                  // Atualiza o tema globalmente — o MaterialApp reage automaticamente
+                  themeNotifier.value = val ? ThemeMode.dark : ThemeMode.light;
+                  setState(() {}); // reconstrói a página com as novas cores
+                },
               ),
             ],
           ),

@@ -18,11 +18,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
 
-  // ── Credenciais do "atalho admin" (login real no Firebase nos bastidores) ──
+
   static const String _adminEmailReal = 'admin@tot.com';
   static const String _adminSenhaReal = 'admin123';
 
-  // ── Cores dinâmicas (segue o tema do sistema) ─────────────────────────────
   bool get _isDark =>
       MediaQuery.of(context).platformBrightness == Brightness.dark;
 
@@ -44,7 +43,6 @@ class _LoginScreenState extends State<LoginScreen> {
     final emailInput = _emailController.text.trim();
     final senhaInput = _senhaController.text;
 
-    // ── Atalho admin: traduz "admin/123" para login real no Firebase ───────
     if (emailInput == 'admin' && senhaInput == '123') {
       setState(() => _isLoading = true);
       try {
@@ -80,7 +78,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // ── Login normal de usuário ────────────────────────────────────────────
+    //  Login normal de usuário 
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
@@ -172,7 +170,7 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ── Logo do App ──────────────────────────────────────────────
+                // Logo do App
                 Container(
                   width: 110,
                   height: 110,
@@ -198,7 +196,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 28),
 
-                // ── Título ───────────────────────────────────────────────────
+                // Título 
                 Text(
                   'Bem-vindo ao Tot',
                   style: TextStyle(
@@ -215,7 +213,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 32),
 
-                // ── Campos ───────────────────────────────────────────────────
+                //  Campos 
                 _buildModernInput(
                   controller: _emailController,
                   label: 'E-mail',
@@ -249,7 +247,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 12),
 
-                // ── Botão Entrar ─────────────────────────────────────────────
+                // Botão Entrar 
                 _isLoading
                     ? const CircularProgressIndicator(color: AppColors.primary)
                     : AnimatedPressButton(
@@ -265,7 +263,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                 const SizedBox(height: 20),
 
-                // ── Cadastro ─────────────────────────────────────────────────
+                // Cadastro 
                 TextButton(
                   onPressed: () => Navigator.pushNamed(context, '/register'),
                   child: Text(
