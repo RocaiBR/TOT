@@ -26,8 +26,9 @@ class _RegisterPageState extends State<RegisterPage> {
   Color get _subText =>
       _isDark ? AppColors.textSecondary : const Color(0xFF6B7280);
   Color get _inputFill => _isDark ? const Color(0xFF1E0D14) : Colors.white;
-  Color get _inputBorder =>
-      _isDark ? AppColors.primary.withOpacity(0.35) : const Color(0xFFDDD0D5);
+  Color get _inputBorder => _isDark
+      ? AppColors.primary.withValues(alpha: 0.35)
+      : const Color(0xFFDDD0D5);
 
   Future<void> _registrar() async {
     if (!_formKey.currentState!.validate()) return;

@@ -5,12 +5,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import '../app_theme.dart';
 import '../utils/ia_service.dart';
+import '../utils/pdf_service.dart';
 import '../utils/chat_storage.dart';
 import '../theme_notifier.dart';
 
@@ -52,7 +54,8 @@ class _ParticlePainter extends CustomPainter {
         final dy = p.y - q.y;
         final dist = math.sqrt(dx * dx + dy * dy);
         if (dist < 90) {
-          linePaint.color = AppColors.wine.withOpacity(0.12 * (1 - dist / 90));
+          linePaint.color =
+              AppColors.wine.withValues(alpha: 0.12 * (1 - dist / 90));
           canvas.drawLine(
             Offset(p.x, p.y),
             Offset(q.x, q.y),
@@ -63,7 +66,7 @@ class _ParticlePainter extends CustomPainter {
 
       // ponto
       final a = (p.alpha + math.sin(p.pulse) * 0.15).clamp(0.0, 1.0);
-      dotPaint.color = p.color.withOpacity(a);
+      dotPaint.color = p.color.withValues(alpha: a);
       canvas.drawCircle(Offset(p.x, p.y), p.radius, dotPaint);
     }
   }
@@ -198,6 +201,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String? _currentChatId;
   bool get _isDark => themeNotifier.value == ThemeMode.dark;
   XFile? _selectedImage;
+  // Anexo de PDF: guardamos o nome do arquivo e a primeira página já
+  // renderizada como imagem PNG (que é o que vai para a IA e o Storage).
+  String? _selectedPdfName;
+  Uint8List? _selectedPdfImageBytes;
+  bool _isProcessingPdf = false;
   bool _isUploading = false;
   bool _isCarregandoConversa = false;
   bool _isTyping = false;
@@ -325,7 +333,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     try {
       final XFile? image = await _picker.pickImage(source: source);
       if (image == null) return;
-      setState(() => _selectedImage = image);
+      setState(() {
+        _selectedImage = image;
+        // Só um anexo por vez: limpa qualquer PDF selecionado.
+        _selectedPdfName = null;
+        _selectedPdfImageBytes = null;
+      });
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
@@ -335,6 +348,77 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           backgroundColor: Colors.red,
         ),
       );
+    }
+  }
+
+  Future<void> _pickPdf() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+        withData:
+            true, // garante os bytes em todas as plataformas (inclusive Web)
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final arquivo = result.files.first;
+
+      // Bytes do PDF: em geral vêm em `bytes` (withData). Em mobile/desktop,
+      // caímos para o caminho do arquivo se necessário.
+      Uint8List? bytes = arquivo.bytes;
+      if (bytes == null && !kIsWeb && arquivo.path != null) {
+        bytes = await File(arquivo.path!).readAsBytes();
+      }
+
+      if (bytes == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Não consegui ler o PDF selecionado.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Fecha o modal de anexo e mostra estado de processamento.
+      if (mounted) Navigator.pop(context);
+      setState(() => _isProcessingPdf = true);
+
+      // Converte a 1ª página do PDF em imagem para a IA conseguir "ler".
+      final imagemPagina = await PdfService.primeiraPaginaComoImagem(bytes);
+
+      if (imagemPagina == null) {
+        if (mounted) {
+          setState(() => _isProcessingPdf = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Não consegui converter o PDF. Verifique se o arquivo é válido.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _selectedImage = null; // só um anexo por vez
+        _selectedPdfName = arquivo.name;
+        _selectedPdfImageBytes = imagemPagina;
+        _isProcessingPdf = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isProcessingPdf = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao escolher PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -365,46 +449,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Container(
-                  height: 200,
-                  width: double.maxFinite,
-                  decoration: BoxDecoration(
-                    color: AppColors.cardMid.withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: AppColors.cardBorder,
-                      width: 1.2,
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildAttachmentOption(
+                        icon: Icons.image_outlined,
+                        titulo: 'Imagem',
+                        formatos: 'PNG, JPG, GIF',
+                        onTap: () => _pickImage(ImageSource.gallery),
+                      ),
                     ),
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => _pickImage(ImageSource.gallery),
-                    child: const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.drive_folder_upload,
-                            size: 48, color: AppColors.accent),
-                        SizedBox(height: 16),
-                        Text(
-                          'Clique para selecionar ou arraste para cá',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: AppColors.textSecondary,
-                            fontSize: 13,
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Formatos: PNG, JPG, GIF',
-                          style: TextStyle(
-                            color: AppColors.textMuted,
-                            fontSize: 11,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                      ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildAttachmentOption(
+                        icon: Icons.picture_as_pdf_outlined,
+                        titulo: 'PDF',
+                        formatos: 'Documento .pdf',
+                        onTap: _pickPdf,
+                      ),
                     ),
-                  ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 Align(
@@ -429,6 +493,51 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildAttachmentOption({
+    required IconData icon,
+    required String titulo,
+    required String formatos,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      height: 160,
+      decoration: BoxDecoration(
+        color: AppColors.cardMid.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder, width: 1.2),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 44, color: AppColors.accent),
+            const SizedBox(height: 14),
+            Text(
+              titulo,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              formatos,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 11,
+                letterSpacing: 1.1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _contentTypeFromName(String name) {
     final ext = name.contains('.') ? name.split('.').last.toLowerCase() : 'jpg';
     switch (ext) {
@@ -443,6 +552,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       default:
         return 'image/jpeg';
     }
+  }
+
+  /// Remove a extensão do nome do arquivo do banco para exibição.
+  /// Ex.: "Conjugada.png" -> "Conjugada". Retorna null se vazio.
+  String? _nomeLimpo(String? nome) {
+    if (nome == null) return null;
+    final limpo = nome.trim();
+    if (limpo.isEmpty) return null;
+    final pontoIdx = limpo.lastIndexOf('.');
+    // Só corta se houver extensão "real" (ponto não no início).
+    if (pontoIdx > 0) {
+      return limpo.substring(0, pontoIdx);
+    }
+    return limpo;
   }
 
   Future<void> _garantirConversa({String? tituloInicial}) async {
@@ -476,6 +599,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         ..clear()
         ..add(_mensagemBoasVindas());
       _selectedImage = null;
+      _selectedPdfName = null;
+      _selectedPdfImageBytes = null;
       _chatController.clear();
     });
   }
@@ -662,7 +787,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _sendMessage() async {
     final text = _chatController.text.trim();
-    if (text.isEmpty && _selectedImage == null) return;
+    final temImagem = _selectedImage != null;
+    final temPdf = _selectedPdfImageBytes != null;
+    if (text.isEmpty && !temImagem && !temPdf) return;
 
     // ── Interceptar fluxo da calculadora de fórmulas ──────────────
     if (_calcEstado == _CalcEstado.coletandoValor && text.isNotEmpty) {
@@ -680,41 +807,61 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     final ehPrimeiraMensagemDoUsuario =
         !_messages.any((m) => m.sender == 'Você');
     final tituloInicial = ehPrimeiraMensagemDoUsuario
-        ? (text.isNotEmpty ? text : 'Imagem enviada')
+        ? (text.isNotEmpty ? text : (temPdf ? 'PDF enviado' : 'Imagem enviada'))
         : null;
 
     await _garantirConversa(tituloInicial: tituloInicial);
 
+    // Para imagem mostramos a prévia local na hora; para PDF a página
+    // renderizada só aparece na bolha depois do upload (vira URL).
     final msgUsuario = ChatMessage(
       sender: 'Você',
       text: text,
-      imageUrl: _selectedImage?.path,
+      imageUrl: temImagem ? _selectedImage?.path : null,
     );
 
+    final indiceMsgUsuario = _messages.length;
     setState(() {
       _messages.add(msgUsuario);
       _isUploading = true;
     });
     _scrollToBottom();
 
-    if (_selectedImage != null) {
+    if (temImagem || temPdf) {
       try {
-        if (kIsWeb) {
-          imageBytesToIA = await _selectedImage!.readAsBytes();
+        // 1) Define os bytes do anexo (imagem direta OU 1ª página do PDF
+        //    já renderizada) e seus metadados.
+        late Uint8List bytesParaUpload;
+        late String nomeArquivo;
+        late String contentType;
+
+        if (temPdf) {
+          bytesParaUpload = _selectedPdfImageBytes!;
+          imageBytesToIA = _selectedPdfImageBytes;
+          final base = (_selectedPdfName ?? 'documento')
+              .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+          nomeArquivo = '$base.png';
+          contentType = 'image/png';
         } else {
-          imageBytesToIA = await File(_selectedImage!.path).readAsBytes();
+          if (kIsWeb) {
+            bytesParaUpload = await _selectedImage!.readAsBytes();
+          } else {
+            bytesParaUpload = await File(_selectedImage!.path).readAsBytes();
+          }
+          imageBytesToIA = bytesParaUpload;
+          nomeArquivo = _selectedImage!.name;
+          contentType = _contentTypeFromName(_selectedImage!.name);
         }
 
+        // 2) Upload para o Firebase Storage.
         final userId = FirebaseAuth.instance.currentUser?.uid ?? 'anonimo';
         final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final storagePath =
-            'chats/$userId/${timestamp}_${_selectedImage!.name}';
+        final storagePath = 'chats/$userId/${timestamp}_$nomeArquivo';
 
         final ref = FirebaseStorage.instance.ref(storagePath);
         final uploadTask = await ref.putData(
-          imageBytesToIA,
-          SettableMetadata(
-              contentType: _contentTypeFromName(_selectedImage!.name)),
+          bytesParaUpload,
+          SettableMetadata(contentType: contentType),
         );
         uploadedImageUrl = await uploadTask.ref.getDownloadURL();
 
@@ -722,9 +869,22 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           'text': text,
           'imageUrl': uploadedImageUrl,
           'storagePath': storagePath,
+          'tipo': temPdf ? 'pdf' : 'imagem',
           'senderId': userId,
           'timestamp': FieldValue.serverTimestamp(),
         });
+
+        // 3) Se foi PDF, agora que temos a URL, mostramos a página
+        //    renderizada na bolha do usuário.
+        if (temPdf && mounted && indiceMsgUsuario < _messages.length) {
+          setState(() {
+            _messages[indiceMsgUsuario] = ChatMessage(
+              sender: 'Você',
+              text: text,
+              imageUrl: uploadedImageUrl,
+            );
+          });
+        }
       } on FirebaseException catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -740,7 +900,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Erro ao processar imagem: $e'),
+              content: Text('Erro ao processar anexo: $e'),
               backgroundColor: Colors.red,
             ),
           );
@@ -759,6 +919,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     setState(() {
       _selectedImage = null;
+      _selectedPdfName = null;
+      _selectedPdfImageBytes = null;
       _isUploading = false;
       _isTyping = true;
       _chatController.clear();
@@ -805,6 +967,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             if (bytes != null) {
               imagensBanco.add({
                 'imageUrl': dados['imageUrl'],
+                'nome': dados['nome'],
                 'bytes': bytes,
               });
             } else {
@@ -836,7 +999,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         final resultado = await IaService.analisarComContexto(
           imagemUsuario: imageBytesToIA,
           imagensBanco: imagensBanco,
-          textoUsuario: text.isNotEmpty ? text : 'análise de imagem',
+          textoUsuario: text.isNotEmpty
+              ? text
+              : (temPdf ? 'análise de documento PDF' : 'análise de imagem'),
         );
 
         if (mounted) {
@@ -852,9 +1017,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               text: '⚠️ ${resultado['erro']}',
             );
           } else {
+            final nomeArquivo = _nomeLimpo(resultado['nome']?.toString());
+            final mensagemIA = resultado['mensagem'] as String;
+            final textoResposta = nomeArquivo != null
+                ? '$mensagemIA\n\n📄 Arquivo correspondente: $nomeArquivo'
+                : mensagemIA;
             respostaIA = ChatMessage(
               sender: 'TOT',
-              text: resultado['mensagem'] as String,
+              text: textoResposta,
               imageUrl: resultado['imageUrl'] as String?,
             );
           }
@@ -1118,7 +1288,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 _buildCalcStatusBar()
               else
                 _buildSuggestions(),
-              if (_selectedImage != null) _buildImagePreview(),
+              if (_isProcessingPdf)
+                _buildPdfProcessing()
+              else if (_selectedImage != null)
+                _buildImagePreview()
+              else if (_selectedPdfImageBytes != null)
+                _buildPdfPreview(),
               _buildInputArea(),
             ],
           ),
@@ -1127,10 +1302,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           if (_drawerOpen)
             FadeTransition(
               opacity: _overlayController,
-              child: GestureDetector(
-                onTap: _closeDrawer,
-                child: Container(
-                  color: Colors.black.withOpacity(0.6),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: _closeDrawer,
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.6),
+                  ),
                 ),
               ),
             ),
@@ -1185,8 +1363,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 gradient: LinearGradient(
                   colors: [
                     Colors.transparent,
-                    AppColors.glow.withOpacity(0.6),
-                    AppColors.crimson.withOpacity(0.4),
+                    AppColors.glow.withValues(alpha: 0.6),
+                    AppColors.crimson.withValues(alpha: 0.4),
                     Colors.transparent,
                   ],
                 ),
@@ -1244,7 +1422,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF22C55E).withOpacity(0.6),
+                        color: const Color(0xFF22C55E).withValues(alpha: 0.6),
                         blurRadius: 8,
                       ),
                     ],
@@ -1338,28 +1516,31 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   'ESCOLHA A FÓRMULA',
                   style: TextStyle(
                     fontSize: 10,
-                    color: AppColors.textSecondary.withOpacity(0.7),
+                    color: AppColors.textSecondary.withValues(alpha: 0.7),
                     letterSpacing: 2,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const Spacer(),
-                GestureDetector(
-                  onTap: () => _cancelarCalculadora(),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.cardBorder),
-                    ),
-                    child: Text(
-                      'CANCELAR',
-                      style: TextStyle(
-                        fontSize: 9,
-                        color: AppColors.textSecondary.withOpacity(0.8),
-                        letterSpacing: 1.5,
-                        fontWeight: FontWeight.w600,
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () => _cancelarCalculadora(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppColors.cardBorder),
+                      ),
+                      child: Text(
+                        'CANCELAR',
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: AppColors.textSecondary.withValues(alpha: 0.8),
+                          letterSpacing: 1.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
@@ -1390,7 +1571,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: AppColors.cardDark.withOpacity(0.7),
+        color: AppColors.cardDark.withValues(alpha: 0.7),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.cardBorder),
       ),
@@ -1408,7 +1589,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   '${formula.nome.toUpperCase()}  ·  ${_indiceVariavelAtual + 1}/$total  ·  AGUARDANDO ${atual.nome}',
                   style: TextStyle(
                     fontSize: 10,
-                    color: AppColors.textSecondary.withOpacity(0.8),
+                    color: AppColors.textSecondary.withValues(alpha: 0.8),
                     letterSpacing: 1.2,
                     fontWeight: FontWeight.w600,
                   ),
@@ -1429,21 +1610,24 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => _cancelarCalculadora(),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.cardBorder),
-              ),
-              child: Text(
-                'CANCELAR',
-                style: TextStyle(
-                  fontSize: 9,
-                  color: AppColors.textSecondary.withOpacity(0.8),
-                  letterSpacing: 1.3,
-                  fontWeight: FontWeight.w600,
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => _cancelarCalculadora(),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: Text(
+                  'CANCELAR',
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: AppColors.textSecondary.withValues(alpha: 0.8),
+                    letterSpacing: 1.3,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
@@ -1459,7 +1643,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.cardDark.withOpacity(0.9),
+        color: AppColors.cardDark.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.cardBorder),
       ),
@@ -1507,17 +1691,140 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               ],
             ),
           ),
-          GestureDetector(
-            onTap: () => setState(() => _selectedImage = null),
-            child: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.cardBorder),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => setState(() => _selectedImage = null),
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: const Icon(Icons.close,
+                    size: 14, color: AppColors.textSecondary),
               ),
-              child: const Icon(Icons.close,
-                  size: 14, color: AppColors.textSecondary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Indicador: convertendo PDF ────────────
+  Widget _buildPdfProcessing() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Row(
+        children: const [
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.accent),
+            ),
+          ),
+          SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              'Convertendo PDF...',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Preview de PDF ────────────────────────
+  Widget _buildPdfPreview() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              gradient: const LinearGradient(
+                colors: [AppColors.primaryDark, AppColors.crimson],
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: _selectedPdfImageBytes != null
+                  ? Image.memory(_selectedPdfImageBytes!, fit: BoxFit.cover)
+                  : const Icon(Icons.picture_as_pdf, color: AppColors.accent),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.picture_as_pdf,
+                        size: 14, color: AppColors.accent),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _selectedPdfName ?? 'documento.pdf',
+                        style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 13,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'PDF pronto para enviar (1ª página)',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => setState(() {
+                _selectedPdfName = null;
+                _selectedPdfImageBytes = null;
+              }),
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: const Icon(Icons.close,
+                    size: 14, color: AppColors.textSecondary),
+              ),
             ),
           ),
         ],
@@ -1534,12 +1841,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         children: [
           Container(
             decoration: BoxDecoration(
-              color: AppColors.cardDark.withOpacity(0.92),
+              color: AppColors.cardDark.withValues(alpha: 0.92),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: AppColors.cardBorder),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 20,
                   offset: const Offset(0, -4),
                 ),
@@ -1555,7 +1862,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     gradient: LinearGradient(
                       colors: [
                         Colors.transparent,
-                        AppColors.crimson.withOpacity(0.3),
+                        AppColors.crimson.withValues(alpha: 0.3),
                         Colors.transparent,
                       ],
                     ),
@@ -1578,7 +1885,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                             hintText:
                                 'Digite sua dúvida ou anexe uma imagem...',
                             hintStyle: TextStyle(
-                              color: AppColors.textSecondary.withOpacity(0.5),
+                              color: AppColors.textSecondary
+                                  .withValues(alpha: 0.5),
                               fontSize: 14,
                             ),
                             border: InputBorder.none,
@@ -1614,31 +1922,35 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       ),
                       const SizedBox(width: 6),
                       // botão enviar
-                      GestureDetector(
-                        onTap: _sendMessage,
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [
-                                AppColors.primaryLight,
-                                AppColors.crimson,
-                              ],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.crimson.withOpacity(0.4),
-                                blurRadius: 16,
-                                offset: const Offset(0, 4),
+                      MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: _sendMessage,
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [
+                                  AppColors.primaryLight,
+                                  AppColors.crimson,
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
                               ),
-                            ],
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color:
+                                      AppColors.crimson.withValues(alpha: 0.4),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(Icons.send_rounded,
+                                size: 18, color: Colors.white),
                           ),
-                          child: const Icon(Icons.send_rounded,
-                              size: 18, color: Colors.white),
                         ),
                       ),
                     ],
@@ -1652,7 +1964,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             'TOT  ·  Assistente Preditivo Premium',
             style: TextStyle(
               fontSize: 10,
-              color: AppColors.textSecondary.withOpacity(0.4),
+              color: AppColors.textSecondary.withValues(alpha: 0.4),
               letterSpacing: 1.5,
             ),
           ),
@@ -1675,7 +1987,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 end: Alignment.bottomRight,
                 colors: [
                   AppColors.cardDark,
-                  AppColors.surface.withOpacity(0.97),
+                  AppColors.surface.withValues(alpha: 0.97),
                   AppColors.bg,
                 ],
               ),
@@ -1697,8 +2009,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    AppColors.crimson.withOpacity(0.4),
-                    AppColors.accent.withOpacity(0.2),
+                    AppColors.crimson.withValues(alpha: 0.4),
+                    AppColors.accent.withValues(alpha: 0.2),
                     Colors.transparent,
                   ],
                 ),
@@ -1759,7 +2071,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       'ASSISTENTE PREDITIVO',
                       style: TextStyle(
                         fontSize: 9,
-                        color: AppColors.textSecondary.withOpacity(0.5),
+                        color: AppColors.textSecondary.withValues(alpha: 0.5),
                         letterSpacing: 2.5,
                       ),
                     ),
@@ -1813,7 +2125,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       'CONVERSAS SALVAS',
                       style: TextStyle(
                         fontSize: 10,
-                        color: AppColors.textSecondary.withOpacity(0.7),
+                        color: AppColors.textSecondary.withValues(alpha: 0.7),
                         letterSpacing: 2,
                         fontWeight: FontWeight.w700,
                       ),
@@ -1873,7 +2185,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       'MODO ESCURO',
                       style: TextStyle(
                         fontSize: 10,
-                        color: AppColors.textSecondary.withOpacity(0.5),
+                        color: AppColors.textSecondary.withValues(alpha: 0.5),
                         letterSpacing: 1.5,
                       ),
                     ),
@@ -1938,7 +2250,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             child: Text(
               'Nenhuma conversa salva ainda. Comece a conversar e ela aparecerá aqui.',
               style: TextStyle(
-                color: AppColors.textSecondary.withOpacity(0.7),
+                color: AppColors.textSecondary.withValues(alpha: 0.7),
                 fontSize: 12,
               ),
             ),
@@ -1961,7 +2273,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         color: selecionado
-            ? AppColors.crimson.withOpacity(0.12)
+            ? AppColors.crimson.withValues(alpha: 0.12)
             : Colors.transparent,
         border: Border(
           left: BorderSide(
@@ -1996,7 +2308,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: AppColors.textSecondary.withOpacity(0.6),
+                  color: AppColors.textSecondary.withValues(alpha: 0.6),
                   fontSize: 11,
                 ),
               ),
@@ -2135,14 +2447,14 @@ class _MessageRow extends StatelessWidget {
               ),
         border: Border.all(
           color: isUser
-              ? const Color(0xFF3B82F6).withOpacity(0.4)
-              : AppColors.accent.withOpacity(0.4),
+              ? const Color(0xFF3B82F6).withValues(alpha: 0.4)
+              : AppColors.accent.withValues(alpha: 0.4),
           width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
             color: (isUser ? const Color(0xFF3B82F6) : AppColors.crimson)
-                .withOpacity(0.25),
+                .withValues(alpha: 0.25),
             blurRadius: 10,
           ),
         ],
@@ -2173,7 +2485,7 @@ class _MessageRow extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                     color: isUser
                         ? const Color(0xFF93C5FD)
-                        : AppColors.accent.withOpacity(0.9),
+                        : AppColors.accent.withValues(alpha: 0.9),
                   ),
                 ),
               ),
@@ -2189,8 +2501,8 @@ class _MessageRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       decoration: BoxDecoration(
         color: isUser
-            ? AppColors.crimson.withOpacity(0.18)
-            : AppColors.cardDark.withOpacity(0.88),
+            ? AppColors.crimson.withValues(alpha: 0.18)
+            : AppColors.cardDark.withValues(alpha: 0.88),
         borderRadius: BorderRadius.only(
           topLeft: const Radius.circular(18),
           topRight: const Radius.circular(18),
@@ -2199,13 +2511,13 @@ class _MessageRow extends StatelessWidget {
         ),
         border: Border.all(
           color: isUser
-              ? AppColors.crimson.withOpacity(0.35)
-              : AppColors.cardBorder.withOpacity(0.7),
+              ? AppColors.crimson.withValues(alpha: 0.35)
+              : AppColors.cardBorder.withValues(alpha: 0.7),
         ),
         boxShadow: [
           BoxShadow(
-            color:
-                (isUser ? AppColors.crimson : Colors.black).withOpacity(0.15),
+            color: (isUser ? AppColors.crimson : Colors.black)
+                .withValues(alpha: 0.15),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -2221,8 +2533,8 @@ class _MessageRow extends StatelessWidget {
               fontWeight: FontWeight.w600,
               letterSpacing: 2,
               color: isUser
-                  ? AppColors.glow.withOpacity(0.8)
-                  : AppColors.accent.withOpacity(0.7),
+                  ? AppColors.glow.withValues(alpha: 0.8)
+                  : AppColors.accent.withValues(alpha: 0.7),
             ),
           ),
           const SizedBox(height: 4),
@@ -2248,7 +2560,7 @@ class _MessageRow extends StatelessWidget {
             const SizedBox(height: 8),
           ],
           if (message.text.isNotEmpty)
-            Text(
+            SelectableText(
               message.text,
               style: const TextStyle(
                 color: AppColors.textPrimary,
@@ -2305,7 +2617,7 @@ class _TypingBubbleState extends State<_TypingBubble>
                 colors: [AppColors.primaryDark, AppColors.crimson],
               ),
               border: Border.all(
-                color: AppColors.accent.withOpacity(0.4),
+                color: AppColors.accent.withValues(alpha: 0.4),
                 width: 1.5,
               ),
             ),
@@ -2325,14 +2637,15 @@ class _TypingBubbleState extends State<_TypingBubble>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
             decoration: BoxDecoration(
-              color: AppColors.cardDark.withOpacity(0.88),
+              color: AppColors.cardDark.withValues(alpha: 0.88),
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(18),
                 topRight: Radius.circular(18),
                 bottomRight: Radius.circular(18),
                 bottomLeft: Radius.circular(4),
               ),
-              border: Border.all(color: AppColors.cardBorder.withOpacity(0.7)),
+              border: Border.all(
+                  color: AppColors.cardBorder.withValues(alpha: 0.7)),
             ),
             child: AnimatedBuilder(
               animation: _ctrl,
@@ -2353,7 +2666,7 @@ class _TypingBubbleState extends State<_TypingBubble>
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: AppColors.crimson
-                                .withOpacity(0.6 + 0.4 * (1 - t)),
+                                .withValues(alpha: 0.6 + 0.4 * (1 - t)),
                           ),
                         ),
                       ),
@@ -2384,31 +2697,34 @@ class _SuggestionChipState extends State<_SuggestionChip> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _hovered
+                    ? AppColors.crimson.withValues(alpha: 0.6)
+                    : AppColors.cardBorder,
+              ),
               color: _hovered
-                  ? AppColors.crimson.withOpacity(0.6)
-                  : AppColors.cardBorder,
+                  ? AppColors.crimson.withValues(alpha: 0.08)
+                  : AppColors.cardDark.withValues(alpha: 0.6),
             ),
-            color: _hovered
-                ? AppColors.crimson.withOpacity(0.08)
-                : AppColors.cardDark.withOpacity(0.6),
-          ),
-          child: Text(
-            widget.label,
-            style: TextStyle(
-              fontSize: 12,
-              color: _hovered ? AppColors.accent : AppColors.textSecondary,
-              letterSpacing: 0.3,
+            child: Text(
+              widget.label,
+              style: TextStyle(
+                fontSize: 12,
+                color: _hovered ? AppColors.accent : AppColors.textSecondary,
+                letterSpacing: 0.3,
+              ),
             ),
           ),
         ),
@@ -2432,118 +2748,121 @@ class _FormulaCardState extends State<_FormulaCard> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-            colors: _pressed
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) {
+          setState(() => _pressed = false);
+          widget.onTap();
+        },
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: _pressed
+                  ? [
+                      AppColors.crimson.withValues(alpha: 0.20),
+                      AppColors.cardDark.withValues(alpha: 0.9),
+                    ]
+                  : [
+                      AppColors.cardDark.withValues(alpha: 0.9),
+                      AppColors.cardMid.withValues(alpha: 0.6),
+                    ],
+            ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _pressed
+                  ? AppColors.crimson.withValues(alpha: 0.6)
+                  : AppColors.cardBorder,
+              width: 1.2,
+            ),
+            boxShadow: _pressed
                 ? [
-                    AppColors.crimson.withOpacity(0.20),
-                    AppColors.cardDark.withOpacity(0.9),
+                    BoxShadow(
+                      color: AppColors.crimson.withValues(alpha: 0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
                   ]
-                : [
-                    AppColors.cardDark.withOpacity(0.9),
-                    AppColors.cardMid.withOpacity(0.6),
+                : null,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [AppColors.primaryDark, AppColors.crimson],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  border: Border.all(
+                    color: AppColors.accent.withValues(alpha: 0.4),
+                    width: 1.2,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.functions_rounded,
+                  size: 18,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      widget.formula.nome.toUpperCase(),
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        color: AppColors.accentGlow,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.formula.descricao,
+                      style: TextStyle(
+                        color: AppColors.textSecondary.withValues(alpha: 0.85),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w300,
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${widget.formula.variaveis.length} ${widget.formula.variaveis.length > 1 ? "variáveis" : "variável"}: '
+                      '${widget.formula.variaveis.map((v) => v.nome).join(", ")}',
+                      style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 10,
+                        letterSpacing: 0.8,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
-          ),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: _pressed
-                ? AppColors.crimson.withOpacity(0.6)
-                : AppColors.cardBorder,
-            width: 1.2,
-          ),
-          boxShadow: _pressed
-              ? [
-                  BoxShadow(
-                    color: AppColors.crimson.withOpacity(0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: const LinearGradient(
-                  colors: [AppColors.primaryDark, AppColors.crimson],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                border: Border.all(
-                  color: AppColors.accent.withOpacity(0.4),
-                  width: 1.2,
                 ),
               ),
-              child: const Icon(
-                Icons.functions_rounded,
-                size: 18,
-                color: Colors.white,
+              const SizedBox(width: 6),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.textSecondary.withValues(alpha: 0.6),
+                size: 22,
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    widget.formula.nome.toUpperCase(),
-                    style: const TextStyle(
-                      fontFamily: 'Georgia',
-                      color: AppColors.accentGlow,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 2,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.formula.descricao,
-                    style: TextStyle(
-                      color: AppColors.textSecondary.withOpacity(0.85),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w300,
-                      height: 1.45,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${widget.formula.variaveis.length} ${widget.formula.variaveis.length > 1 ? "variáveis" : "variável"}: '
-                    '${widget.formula.variaveis.map((v) => v.nome).join(", ")}',
-                    style: TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 10,
-                      letterSpacing: 0.8,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: AppColors.textSecondary.withOpacity(0.6),
-              size: 22,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2592,29 +2911,43 @@ class _AppBarAvatarState extends State<_AppBarAvatar> {
         : 'U';
     final hasPhoto = _photoURL != null && _photoURL!.isNotEmpty;
 
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: hasPhoto
-              ? null
-              : const LinearGradient(
-                  colors: [AppColors.wine, AppColors.crimson],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-          border: Border.all(color: AppColors.cardBorder),
-          color: hasPhoto ? null : null,
-        ),
-        child: ClipOval(
-          child: hasPhoto
-              ? Image.network(
-                  _photoURL!,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Center(
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: hasPhoto
+                ? null
+                : const LinearGradient(
+                    colors: [AppColors.wine, AppColors.crimson],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+            border: Border.all(color: AppColors.cardBorder),
+            color: hasPhoto ? null : null,
+          ),
+          child: ClipOval(
+            child: hasPhoto
+                ? Image.network(
+                    _photoURL!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Center(
+                      child: Text(
+                        initial,
+                        style: const TextStyle(
+                          fontFamily: 'Georgia',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  )
+                : Center(
                     child: Text(
                       initial,
                       style: const TextStyle(
@@ -2625,18 +2958,7 @@ class _AppBarAvatarState extends State<_AppBarAvatar> {
                       ),
                     ),
                   ),
-                )
-              : Center(
-                  child: Text(
-                    initial,
-                    style: const TextStyle(
-                      fontFamily: 'Georgia',
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
+          ),
         ),
       ),
     );
@@ -2651,17 +2973,20 @@ class _AppBarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.cardBorder),
-          color: AppColors.crimson.withOpacity(0.08),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.cardBorder),
+            color: AppColors.crimson.withValues(alpha: 0.08),
+          ),
+          child: Center(child: child),
         ),
-        child: Center(child: child),
       ),
     );
   }
@@ -2675,16 +3000,19 @@ class _InputActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.cardBorder),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.cardBorder),
+          ),
+          child: Center(child: child),
         ),
-        child: Center(child: child),
       ),
     );
   }
@@ -2712,49 +3040,54 @@ class _DrawerItemState extends State<_DrawerItem> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          color: widget.isActive || _pressed
-              ? AppColors.crimson.withOpacity(0.1)
-              : Colors.transparent,
-          border: Border(
-            left: BorderSide(
-              color: widget.isActive ? AppColors.crimson : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              widget.icon,
-              size: 18,
-              color:
-                  widget.isActive ? AppColors.accent : AppColors.textSecondary,
-            ),
-            const SizedBox(width: 14),
-            Text(
-              widget.label,
-              style: TextStyle(
-                fontSize: 14,
-                color: widget.isActive
-                    ? AppColors.textPrimary
-                    : AppColors.textSecondary,
-                fontWeight: widget.isActive ? FontWeight.w400 : FontWeight.w300,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) {
+          setState(() => _pressed = false);
+          widget.onTap();
+        },
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            color: widget.isActive || _pressed
+                ? AppColors.crimson.withValues(alpha: 0.1)
+                : Colors.transparent,
+            border: Border(
+              left: BorderSide(
+                color: widget.isActive ? AppColors.crimson : Colors.transparent,
+                width: 2,
               ),
             ),
-          ],
+          ),
+          child: Row(
+            children: [
+              Icon(
+                widget.icon,
+                size: 18,
+                color: widget.isActive
+                    ? AppColors.accent
+                    : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 14),
+              Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: widget.isActive
+                      ? AppColors.textPrimary
+                      : AppColors.textSecondary,
+                  fontWeight:
+                      widget.isActive ? FontWeight.w400 : FontWeight.w300,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2815,12 +3148,12 @@ class _DrawerAvatarState extends State<_DrawerAvatar> {
                 end: Alignment.bottomRight,
               ),
         border: Border.all(
-          color: AppColors.accent.withOpacity(0.4),
+          color: AppColors.accent.withValues(alpha: 0.4),
           width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.crimson.withOpacity(0.3),
+            color: AppColors.crimson.withValues(alpha: 0.3),
             blurRadius: 16,
           ),
         ],
@@ -2866,51 +3199,54 @@ class _ToggleSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onChanged(!value),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        width: 44,
-        height: 24,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          gradient: value
-              ? const LinearGradient(
-                  colors: [AppColors.wine, AppColors.crimson],
-                )
-              : null,
-          color: value ? null : AppColors.cardMid,
-          border: Border.all(
-            color: value
-                ? AppColors.crimson.withOpacity(0.6)
-                : AppColors.cardBorder,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => onChanged(!value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          width: 44,
+          height: 24,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: value
+                ? const LinearGradient(
+                    colors: [AppColors.wine, AppColors.crimson],
+                  )
+                : null,
+            color: value ? null : AppColors.cardMid,
+            border: Border.all(
+              color: value
+                  ? AppColors.crimson.withValues(alpha: 0.6)
+                  : AppColors.cardBorder,
+            ),
           ),
-        ),
-        child: Stack(
-          children: [
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-              left: value ? 22 : 3,
-              top: 3,
-              child: Container(
-                width: 16,
-                height: 16,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: value ? AppColors.accent : AppColors.textMuted,
-                  boxShadow: value
-                      ? [
-                          BoxShadow(
-                            color: AppColors.accent.withOpacity(0.5),
-                            blurRadius: 6,
-                          ),
-                        ]
-                      : null,
+          child: Stack(
+            children: [
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
+                left: value ? 22 : 3,
+                top: 3,
+                child: Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: value ? AppColors.accent : AppColors.textMuted,
+                    boxShadow: value
+                        ? [
+                            BoxShadow(
+                              color: AppColors.accent.withValues(alpha: 0.5),
+                              blurRadius: 6,
+                            ),
+                          ]
+                        : null,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

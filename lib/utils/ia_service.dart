@@ -140,10 +140,11 @@ Se nenhuma imagem for suficientemente similar, retorne:
         if (indice >= 1 && indice <= bancoParcial.length) {
           return {
             'imageUrl': bancoParcial[indice - 1]['imageUrl'] as String,
+            'nome': bancoParcial[indice - 1]['nome'],
             'mensagem': mensagem,
           };
         } else {
-          return {'imageUrl': null, 'mensagem': mensagem};
+          return {'imageUrl': null, 'nome': null, 'mensagem': mensagem};
         }
       } else {
         String mensagemErro;

@@ -18,7 +18,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
 
-
   static const String _adminEmailReal = 'admin@tot.com';
   static const String _adminSenhaReal = 'admin123';
 
@@ -36,8 +35,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Color get _inputFill => _isDark ? const Color(0xFF1E0D14) : Colors.white;
 
   Color get _inputBorder => _isDark
-      ? AppColors.primary.withOpacity(0.35)
-      : AppColors.primary.withOpacity(0.25);
+      ? AppColors.primary.withValues(alpha: 0.35)
+      : AppColors.primary.withValues(alpha: 0.25);
 
   Future<void> _fazerLogin() async {
     final emailInput = _emailController.text.trim();
@@ -78,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    //  Login normal de usuário 
+    //  Login normal de usuário
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
@@ -179,7 +178,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     boxShadow: [
                       BoxShadow(
                         color: AppColors.primary
-                            .withOpacity(_isDark ? 0.45 : 0.20),
+                            .withValues(alpha: _isDark ? 0.45 : 0.20),
                         blurRadius: 24,
                         spreadRadius: 2,
                         offset: const Offset(0, 6),
@@ -196,7 +195,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 28),
 
-                // Título 
+                // Título
                 Text(
                   'Bem-vindo ao Tot',
                   style: TextStyle(
@@ -213,7 +212,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 32),
 
-                //  Campos 
+                //  Campos
                 _buildModernInput(
                   controller: _emailController,
                   label: 'E-mail',
@@ -247,7 +246,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 12),
 
-                // Botão Entrar 
+                // Botão Entrar
                 _isLoading
                     ? const CircularProgressIndicator(color: AppColors.primary)
                     : AnimatedPressButton(
@@ -263,7 +262,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                 const SizedBox(height: 20),
 
-                // Cadastro 
+                // Cadastro
                 TextButton(
                   onPressed: () => Navigator.pushNamed(context, '/register'),
                   child: Text(

@@ -93,7 +93,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
                     colors: [
-                      AppColors.primary.withOpacity(0.08 * _pulse.value),
+                      AppColors.primary.withValues(alpha: 0.08 * _pulse.value),
                       Colors.transparent,
                     ],
                   ),
@@ -162,7 +162,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
                       Text(
                         'Auxílio de pesquisa e automatização',
                         style: TextStyle(
-                          color: AppColors.textSecondary.withOpacity(0.8),
+                          color: AppColors.textSecondary.withValues(alpha: 0.8),
                           fontSize: 12,
                           letterSpacing: 1.0,
                         ),
@@ -202,7 +202,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
                 'v1.0.0 · PINHALENSE',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: AppColors.textSecondary.withOpacity(0.5),
+                  color: AppColors.textSecondary.withValues(alpha: 0.5),
                   fontSize: 10,
                   letterSpacing: 2.5,
                 ),
@@ -223,13 +223,13 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(32),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.28),
+            color: AppColors.primary.withValues(alpha: 0.28),
             blurRadius: 48,
             spreadRadius: 4,
             offset: const Offset(0, 12),
           ),
           BoxShadow(
-            color: Colors.black.withOpacity(0.5),
+            color: Colors.black.withValues(alpha: 0.5),
             blurRadius: 20,
             offset: const Offset(0, 6),
           ),
@@ -261,7 +261,7 @@ class _DotGridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = AppColors.textSecondary.withOpacity(0.12)
+      ..color = AppColors.textSecondary.withValues(alpha: 0.12)
       ..strokeCap = StrokeCap.round;
 
     const spacing = 28.0;

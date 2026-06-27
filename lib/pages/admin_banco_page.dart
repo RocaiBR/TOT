@@ -83,14 +83,14 @@ class _ImageCardState extends State<_ImageCard>
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _hovered
-                        ? AppColors.accent.withOpacity(0.7)
-                        : AppColors.cardBorder.withOpacity(0.5),
+                        ? AppColors.accent.withValues(alpha: 0.7)
+                        : AppColors.cardBorder.withValues(alpha: 0.5),
                     width: 1.2,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color:
-                          AppColors.accent.withOpacity(_hovered ? 0.35 : 0.12),
+                      color: AppColors.accent
+                          .withValues(alpha: _hovered ? 0.35 : 0.12),
                       blurRadius: _shadow.value * 2.5,
                       spreadRadius: _hovered ? 1 : 0,
                       offset: Offset(0, _shadow.value * 0.5),
@@ -122,7 +122,7 @@ class _ImageCardState extends State<_ImageCard>
                             stops: const [0.45, 1.0],
                             colors: [
                               Colors.transparent,
-                              Colors.black.withOpacity(0.82),
+                              Colors.black.withValues(alpha: 0.82),
                             ],
                           ),
                         ),
@@ -137,7 +137,7 @@ class _ImageCardState extends State<_ImageCard>
                               center: Alignment.center,
                               radius: 1.0,
                               colors: [
-                                AppColors.crimson.withOpacity(0.6),
+                                AppColors.crimson.withValues(alpha: 0.6),
                                 Colors.transparent,
                               ],
                             ),
@@ -205,10 +205,11 @@ class _ImageCardState extends State<_ImageCard>
                           onTap: widget.onRemove,
                           child: Container(
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.65),
+                              color: Colors.black.withValues(alpha: 0.65),
                               shape: BoxShape.circle,
                               border: Border.all(
-                                  color: Colors.red.withOpacity(0.6), width: 1),
+                                  color: Colors.red.withValues(alpha: 0.6),
+                                  width: 1),
                             ),
                             padding: const EdgeInsets.all(4),
                             child: const Icon(Icons.close_rounded,
@@ -450,7 +451,7 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
                   border: Border.all(
                     color: _isUploading
                         ? AppColors.cardBorder
-                        : AppColors.crimson.withOpacity(0.4),
+                        : AppColors.crimson.withValues(alpha: 0.4),
                     width: 1,
                   ),
                   boxShadow: _isUploading
@@ -524,7 +525,7 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
                         Icon(
                           Icons.photo_library_outlined,
                           size: 56,
-                          color: AppColors.textMuted.withOpacity(0.5),
+                          color: AppColors.textMuted.withValues(alpha: 0.5),
                         ),
                         const SizedBox(height: 16),
                         const Text(

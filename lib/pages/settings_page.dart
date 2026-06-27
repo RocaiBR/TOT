@@ -21,8 +21,9 @@ class _SettingsPageState extends State<SettingsPage> {
   Color get _cardColor => _isDark ? AppColors.cardDark : Colors.white;
   Color get _textColor =>
       _isDark ? AppColors.textPrimary : const Color(0xFF1C1C2E);
-  Color get _cardBorder =>
-      _isDark ? AppColors.primary.withOpacity(0.25) : const Color(0xFFE8D8DF);
+  Color get _cardBorder => _isDark
+      ? AppColors.primary.withValues(alpha: 0.25)
+      : const Color(0xFFE8D8DF);
 
   Widget _buildSectionHeader(String title) {
     return Padding(
@@ -46,7 +47,7 @@ class _SettingsPageState extends State<SettingsPage> {
         boxShadow: [
           if (!_isDark)
             BoxShadow(
-                color: Colors.black.withOpacity(0.04),
+                color: Colors.black.withValues(alpha: 0.04),
                 blurRadius: 8,
                 offset: const Offset(0, 4))
         ],
@@ -70,14 +71,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 title:
                     Text('Notificações', style: TextStyle(color: _textColor)),
                 value: _notificationsEnabled,
-                activeColor: AppColors.accent,
+                activeThumbColor: AppColors.accent,
                 onChanged: (val) => setState(() => _notificationsEnabled = val),
               ),
               const Divider(height: 1, indent: 16, endIndent: 16),
               SwitchListTile(
                 title: Text('Modo Escuro', style: TextStyle(color: _textColor)),
                 value: _darkModeEnabled,
-                activeColor: AppColors.accent,
+                activeThumbColor: AppColors.accent,
                 onChanged: (val) {
                   // Atualiza o tema globalmente — o MaterialApp reage automaticamente
                   themeNotifier.value = val ? ThemeMode.dark : ThemeMode.light;

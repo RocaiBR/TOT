@@ -138,43 +138,46 @@ class _AnimatedPressButtonState extends State<AnimatedPressButton>
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => _ctrl.forward(),
-      onTapUp: (_) {
-        _ctrl.reverse();
-        widget.onPressed();
-      },
-      onTapCancel: () => _ctrl.reverse(),
-      child: ScaleTransition(
-        scale: _scale,
-        child: Container(
-          width: double.infinity,
-          height: 52,
-          decoration: BoxDecoration(
-            gradient: widget.isOutlined
-                ? null
-                : const LinearGradient(
-                    colors: [AppColors.primaryLight, AppColors.crimson],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-            color: widget.isOutlined ? Colors.transparent : null,
-            border: widget.isOutlined
-                ? Border.all(color: AppColors.crimson, width: 1.5)
-                : null,
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: widget.isOutlined
-                ? null
-                : const [
-                    BoxShadow(
-                      color: Color(0x55B91C4A),
-                      blurRadius: 16,
-                      offset: Offset(0, 6),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTapDown: (_) => _ctrl.forward(),
+        onTapUp: (_) {
+          _ctrl.reverse();
+          widget.onPressed();
+        },
+        onTapCancel: () => _ctrl.reverse(),
+        child: ScaleTransition(
+          scale: _scale,
+          child: Container(
+            width: double.infinity,
+            height: 52,
+            decoration: BoxDecoration(
+              gradient: widget.isOutlined
+                  ? null
+                  : const LinearGradient(
+                      colors: [AppColors.primaryLight, AppColors.crimson],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  ],
+              color: widget.isOutlined ? Colors.transparent : null,
+              border: widget.isOutlined
+                  ? Border.all(color: AppColors.crimson, width: 1.5)
+                  : null,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: widget.isOutlined
+                  ? null
+                  : const [
+                      BoxShadow(
+                        color: Color(0x55B91C4A),
+                        blurRadius: 16,
+                        offset: Offset(0, 6),
+                      ),
+                    ],
+            ),
+            alignment: Alignment.center,
+            child: widget.child,
           ),
-          alignment: Alignment.center,
-          child: widget.child,
         ),
       ),
     );

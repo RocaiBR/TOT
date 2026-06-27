@@ -227,12 +227,12 @@ class _ProfilePageState extends State<ProfilePage> {
               end: Alignment.bottomRight,
             ),
             border: Border.all(
-              color: AppColors.accent.withOpacity(0.5),
+              color: AppColors.accent.withValues(alpha: 0.5),
               width: 2.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: AppColors.crimson.withOpacity(0.4),
+                color: AppColors.crimson.withValues(alpha: 0.4),
                 blurRadius: 24,
               ),
             ],
@@ -258,26 +258,29 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ),
         if (_isEditing)
-          GestureDetector(
-            onTap: _selecionarImagem,
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: AppColors.crimson,
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.surface, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.crimson.withOpacity(0.5),
-                    blurRadius: 8,
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.camera_alt,
-                size: 18,
-                color: Colors.white,
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: _selecionarImagem,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.crimson,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.surface, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.crimson.withValues(alpha: 0.5),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.camera_alt,
+                  size: 18,
+                  color: Colors.white,
+                ),
               ),
             ),
           ),
@@ -342,11 +345,13 @@ class _ProfilePageState extends State<ProfilePage> {
           fillColor: AppColors.cardDark,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: AppColors.primary.withOpacity(0.3)),
+            borderSide:
+                BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: AppColors.primary.withOpacity(0.3)),
+            borderSide:
+                BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
@@ -516,71 +521,77 @@ class _ProfilePageState extends State<ProfilePage> {
                     const SizedBox(height: 16),
 
                     // Botão de logout
-                    GestureDetector(
-                      onTap: () async {
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            backgroundColor: AppColors.cardDark,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              side: const BorderSide(
-                                  color: AppColors.cardBorder, width: 0.5),
-                            ),
-                            title: const Text('Sair da conta',
-                                style: TextStyle(color: AppColors.textPrimary)),
-                            content: const Text(
-                              'Tem certeza que deseja sair?',
-                              style: TextStyle(color: AppColors.textSecondary),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('CANCELAR',
-                                    style: TextStyle(
-                                        color: AppColors.textSecondary)),
+                    MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: AppColors.cardDark,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: const BorderSide(
+                                    color: AppColors.cardBorder, width: 0.5),
                               ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text('SAIR',
-                                    style: TextStyle(
-                                        color: AppColors.accent,
-                                        fontWeight: FontWeight.bold)),
+                              title: const Text('Sair da conta',
+                                  style:
+                                      TextStyle(color: AppColors.textPrimary)),
+                              content: const Text(
+                                'Tem certeza que deseja sair?',
+                                style:
+                                    TextStyle(color: AppColors.textSecondary),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('CANCELAR',
+                                      style: TextStyle(
+                                          color: AppColors.textSecondary)),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('SAIR',
+                                      style: TextStyle(
+                                          color: AppColors.accent,
+                                          fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirm == true && mounted) {
+                            await FirebaseAuth.instance.signOut();
+                            Navigator.pushNamedAndRemoveUntil(
+                                context, '/', (_) => false);
+                          }
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                                color: Colors.red.withValues(alpha: 0.5),
+                                width: 1.5),
+                          ),
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.logout,
+                                  color: Colors.redAccent, size: 18),
+                              SizedBox(width: 8),
+                              Text(
+                                'SAIR DA CONTA',
+                                style: TextStyle(
+                                  color: Colors.redAccent,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.5,
+                                  fontSize: 14,
+                                ),
                               ),
                             ],
                           ),
-                        );
-                        if (confirm == true && mounted) {
-                          await FirebaseAuth.instance.signOut();
-                          Navigator.pushNamedAndRemoveUntil(
-                              context, '/', (_) => false);
-                        }
-                      },
-                      child: Container(
-                        width: double.infinity,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                              color: Colors.red.withOpacity(0.5), width: 1.5),
-                        ),
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.logout,
-                                color: Colors.redAccent, size: 18),
-                            SizedBox(width: 8),
-                            Text(
-                              'SAIR DA CONTA',
-                              style: TextStyle(
-                                color: Colors.redAccent,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.5,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
                         ),
                       ),
                     ),
