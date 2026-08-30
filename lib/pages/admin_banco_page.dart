@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io';
-import 'package:image_picker/image_picker.dart';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../app_theme.dart';
+import '../utils/pdf_service.dart';
 
 class _ImageCard extends StatefulWidget {
   final Map<String, dynamic> img;
@@ -237,8 +239,9 @@ class AdminBancoPage extends StatefulWidget {
 }
 
 class _AdminBancoPageState extends State<AdminBancoPage> {
-  final ImagePicker _picker = ImagePicker();
   bool _isUploading = false;
+  int _totalEnvio = 0;
+  int _enviadasNoLote = 0;
   List<Map<String, dynamic>> _imagensBanco = [];
 
   @override
@@ -274,78 +277,134 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
   }
 
   Future<void> _adicionarImagem() async {
-    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-    if (image == null) return;
+    // FilePicker com allowMultiple: o mesmo mecanismo usado no chat,
+    // confiável para multi-seleção também na Web.
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'],
+      allowMultiple: true,
+      withData:
+          true, // garante os bytes em todas as plataformas (inclusive Web)
+    );
+    if (result == null || result.files.isEmpty) return;
 
-    setState(() => _isUploading = true);
+    setState(() {
+      _isUploading = true;
+      _totalEnvio = result.files.length;
+      _enviadasNoLote = 0;
+    });
 
-    try {
-      // Lê os bytes da imagem
-      final bytes = kIsWeb
-          ? await image.readAsBytes()
-          : await File(image.path).readAsBytes();
+    var sucesso = 0;
+    var falhas = 0;
+    String? ultimoErro;
 
-      // Sobe para o Firebase Storage
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final storagePath = 'banco_imagens/${timestamp}_${image.name}';
+    for (final arquivo in result.files) {
+      try {
+        // Lê os bytes do arquivo (fallback pelo path fora da Web)
+        Uint8List? bytes = arquivo.bytes;
+        if (bytes == null && !kIsWeb && arquivo.path != null) {
+          bytes = await File(arquivo.path!).readAsBytes();
+        }
+        if (bytes == null) {
+          falhas++;
+          continue;
+        }
 
-      final ref = FirebaseStorage.instance.ref(storagePath);
-      final uploadTask = await ref.putData(
-        bytes,
-        SettableMetadata(contentType: _contentTypeFromName(image.name)),
+        final ehPdf = arquivo.extension?.toLowerCase() == 'pdf';
+        String nomeUpload = arquivo.name;
+        String contentType = _contentTypeFromName(arquivo.name);
+
+        if (ehPdf) {
+          // O banco guarda IMAGENS (a IA e o <Image.network> só entendem
+          // imagem), então convertemos a 1ª página do PDF em PNG.
+          final imagemPagina = await PdfService.primeiraPaginaComoImagem(bytes);
+          if (imagemPagina == null) {
+            falhas++;
+            ultimoErro = 'não consegui converter o PDF "${arquivo.name}"';
+            continue;
+          }
+          bytes = imagemPagina;
+          final base = arquivo.name
+              .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+          nomeUpload = '$base.png';
+          contentType = 'image/png';
+        }
+
+        // Sobe para o Firebase Storage
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final storagePath = 'banco_imagens/${timestamp}_$nomeUpload';
+
+        final ref = FirebaseStorage.instance.ref(storagePath);
+        final uploadTask = await ref.putData(
+          bytes,
+          SettableMetadata(contentType: contentType),
+        );
+
+        // URL pública (com token) que serve para <Image.network>
+        final imageUrl = await uploadTask.ref.getDownloadURL();
+
+        // Salva no Firestore.
+        // baixar via SDK do Firebase (sem problemas de CORS no web).
+        await FirebaseFirestore.instance.collection('banco_imagens').add({
+          'imageUrl': imageUrl,
+          'storagePath': storagePath,
+          'nome': nomeUpload,
+          'tipo': ehPdf ? 'pdf' : 'imagem',
+          'adicionadoEm': DateTime.now().toIso8601String(),
+        });
+
+        sucesso++;
+      } on FirebaseException catch (e) {
+        falhas++;
+        ultimoErro = '${e.code} — ${e.message}';
+      } catch (e) {
+        falhas++;
+        ultimoErro = '$e';
+      } finally {
+        if (mounted) setState(() => _enviadasNoLote++);
+      }
+    }
+
+    if (mounted) {
+      final String mensagem;
+      if (falhas == 0) {
+        mensagem = sucesso == 1
+            ? 'Arquivo adicionado ao banco com sucesso!'
+            : '$sucesso arquivos adicionados ao banco com sucesso!';
+      } else {
+        mensagem =
+            '$sucesso enviada(s) com sucesso, $falhas com erro. Último erro: $ultimoErro';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                falhas == 0
+                    ? Icons.check_circle_outline
+                    : Icons.warning_amber_rounded,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Text(mensagem)),
+            ],
+          ),
+          backgroundColor: falhas == 0 ? AppColors.primaryLight : Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
+    }
 
-      // URL pública (com token) que serve para <Image.network>
-      final imageUrl = await uploadTask.ref.getDownloadURL();
+    await _carregarBanco();
 
-      // Salva no Firestore.
-      // baixar via SDK do Firebase (sem problemas de CORS no web).
-      await FirebaseFirestore.instance.collection('banco_imagens').add({
-        'imageUrl': imageUrl,
-        'storagePath': storagePath,
-        'nome': image.name,
-        'adicionadoEm': DateTime.now().toIso8601String(),
+    if (mounted) {
+      setState(() {
+        _isUploading = false;
+        _totalEnvio = 0;
+        _enviadasNoLote = 0;
       });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.check_circle_outline, color: Colors.white),
-                SizedBox(width: 10),
-                Text('Imagem adicionada ao banco com sucesso!'),
-              ],
-            ),
-            backgroundColor: AppColors.primaryLight,
-            behavior: SnackBarBehavior.floating,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
-      }
-
-      await _carregarBanco();
-    } on FirebaseException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro Firebase Storage: ${e.code} — ${e.message}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isUploading = false);
     }
   }
 
@@ -480,8 +539,10 @@ class _AdminBancoPageState extends State<AdminBancoPage> {
                     const SizedBox(width: 10),
                     Text(
                       _isUploading
-                          ? 'ENVIANDO...'
-                          : 'ADICIONAR IMAGEM DE REFERÊNCIA',
+                          ? (_totalEnvio > 1
+                              ? 'ENVIANDO $_enviadasNoLote/$_totalEnvio...'
+                              : 'ENVIANDO...')
+                          : 'ADICIONAR IMAGENS OU PDFs',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w800,

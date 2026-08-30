@@ -14,6 +14,7 @@ import '../app_theme.dart';
 import '../utils/ia_service.dart';
 import '../utils/pdf_service.dart';
 import '../utils/chat_storage.dart';
+import '../utils/calculo_capacidade_moega.dart';
 import '../theme_notifier.dart';
 
 class _Particle {
@@ -81,7 +82,18 @@ enum _CalcEstado { idle, escolhendoFormula, coletandoValor }
 class _CalcVariavel {
   final String nome;
   final String descricao;
-  const _CalcVariavel(this.nome, this.descricao);
+
+  /// Quando definido, restringe a entrada a estes valores exatos
+  /// (ex.: multiplicador 480/620, divisor 40/60).
+  final List<double>? opcoes;
+
+  /// Quando definido, o valor digitado precisa ser ESTRITAMENTE maior
+  /// que este limite (ex.: A e B precisam ser > 0,6 por causa da
+  /// correção A − 0,6 / B − 0,6).
+  final double? minExclusivo;
+
+  const _CalcVariavel(this.nome, this.descricao,
+      {this.opcoes, this.minExclusivo});
 }
 
 class _CalcFormula {
@@ -171,6 +183,53 @@ final List<_CalcFormula> _formulasDisponiveis = [
           '      = ${r.toStringAsFixed(3)}';
     },
   ),
+  _CalcFormula(
+    id: 'capacidade_moega',
+    nome: 'Capacidade de Moega',
+    descricao: 'Capacidade com desconto de borda de 0,6\n'
+        '((A − 0,6) × (B − 0,6) × (C + D)) × M ÷ K\n'
+        '• M = multiplicador (480 ou 620)\n'
+        '• K = divisor (40 ou 60)',
+    variaveis: const [
+      _CalcVariavel('A', 'medida A — precisa ser maior que 0,6',
+          minExclusivo: kDescontoBorda),
+      _CalcVariavel('B', 'medida B — precisa ser maior que 0,6',
+          minExclusivo: kDescontoBorda),
+      _CalcVariavel('C', 'medida C'),
+      _CalcVariavel('D', 'medida D'),
+      _CalcVariavel('M', 'multiplicador — digite 480 ou 620',
+          opcoes: kMultiplicadoresValidos),
+      _CalcVariavel('K', 'divisor — digite 40 ou 60',
+          opcoes: kDivisoresValidos),
+    ],
+    calcular: (v) => calcularCapacidadeMoega(
+      a: v['A']!,
+      b: v['B']!,
+      c: v['C']!,
+      d: v['D']!,
+      multiplicador: v['M']!,
+      divisor: v['K']!,
+    ).resultadoFinal,
+    memoriaCalculo: (v, r) {
+      final det = calcularCapacidadeMoega(
+        a: v['A']!,
+        b: v['B']!,
+        c: v['C']!,
+        d: v['D']!,
+        multiplicador: v['M']!,
+        divisor: v['K']!,
+      );
+      final m = formatarNumero(v['M']!);
+      final k = formatarNumero(v['K']!);
+      return 'A\u2032 = ${v['A']} − 0,6 = ${det.aCorrigido.toStringAsFixed(3)}\n'
+          'B\u2032 = ${v['B']} − 0,6 = ${det.bCorrigido.toStringAsFixed(3)}\n'
+          'R1 = A\u2032 × B\u2032 × C = ${det.resultado1.toStringAsFixed(3)}\n'
+          'R2 = A\u2032 × B\u2032 × D = ${det.resultado2.toStringAsFixed(3)}\n'
+          'Soma = R1 + R2 = ${det.somaTotal.toStringAsFixed(3)}\n'
+          '× $m = ${det.valorMultiplicado.toStringAsFixed(3)}\n'
+          '÷ $k = ${r.toStringAsFixed(3)}';
+    },
+  ),
 ];
 
 // ─────────────────────────────────────────────
@@ -200,11 +259,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Estado (preservado do TOT 16)
   String? _currentChatId;
   bool get _isDark => themeNotifier.value == ThemeMode.dark;
-  XFile? _selectedImage;
-  // Anexo de PDF: guardamos o nome do arquivo e a primeira página já
-  // renderizada como imagem PNG (que é o que vai para a IA e o Storage).
-  String? _selectedPdfName;
-  Uint8List? _selectedPdfImageBytes;
+  // Anexos selecionados (imagens e/ou 1ª página de PDFs já renderizada como
+  // PNG). Agora é possível enviar VÁRIOS arquivos de uma só vez.
+  final List<_Anexo> _anexos = [];
+  // O modelo de visão aceita no máx. 5 imagens por requisição; reservamos
+  // pelo menos 1 vaga para as imagens do banco de referência.
+  static const int _maxAnexos = 4;
   bool _isProcessingPdf = false;
   bool _isUploading = false;
   bool _isCarregandoConversa = false;
@@ -331,15 +391,64 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _pickImage(ImageSource source) async {
     try {
-      final XFile? image = await _picker.pickImage(source: source);
-      if (image == null) return;
-      setState(() {
-        _selectedImage = image;
-        // Só um anexo por vez: limpa qualquer PDF selecionado.
-        _selectedPdfName = null;
-        _selectedPdfImageBytes = null;
-      });
+      var limiteAtingido = false;
+      final novos = <_Anexo>[];
+
+      if (source == ImageSource.gallery) {
+        // Usamos o FilePicker (o mesmo dos PDFs) porque o allowMultiple dele
+        // é confiável na Web; o image_picker fica reservado para a câmera.
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.image,
+          allowMultiple: true,
+          withData:
+              true, // garante os bytes em todas as plataformas (inclusive Web)
+        );
+        if (result == null || result.files.isEmpty) return;
+
+        for (final arquivo in result.files) {
+          if (_anexos.length + novos.length >= _maxAnexos) {
+            limiteAtingido = true;
+            break;
+          }
+          Uint8List? bytes = arquivo.bytes;
+          if (bytes == null && !kIsWeb && arquivo.path != null) {
+            bytes = await File(arquivo.path!).readAsBytes();
+          }
+          if (bytes == null) continue;
+          novos.add(_Anexo(
+            nome: arquivo.name,
+            bytes: bytes,
+            contentType: _contentTypeFromName(arquivo.name),
+          ));
+        }
+      } else {
+        // Câmera continua no image_picker (uma foto por vez).
+        final unica = await _picker.pickImage(source: source);
+        if (unica == null) return;
+        if (_anexos.length >= _maxAnexos) {
+          limiteAtingido = true;
+        } else {
+          final bytes = await unica.readAsBytes();
+          novos.add(_Anexo(
+            nome: unica.name,
+            bytes: bytes,
+            contentType: _contentTypeFromName(unica.name),
+          ));
+        }
+      }
+
+      if (novos.isNotEmpty) {
+        setState(() => _anexos.addAll(novos));
+      }
       if (mounted) Navigator.pop(context);
+      if (limiteAtingido && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Máximo de $_maxAnexos arquivos por mensagem.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -356,59 +465,73 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
+        allowMultiple: true, // permite escolher vários PDFs de uma vez
         withData:
             true, // garante os bytes em todas as plataformas (inclusive Web)
       );
       if (result == null || result.files.isEmpty) return;
 
-      final arquivo = result.files.first;
-
-      // Bytes do PDF: em geral vêm em `bytes` (withData). Em mobile/desktop,
-      // caímos para o caminho do arquivo se necessário.
-      Uint8List? bytes = arquivo.bytes;
-      if (bytes == null && !kIsWeb && arquivo.path != null) {
-        bytes = await File(arquivo.path!).readAsBytes();
-      }
-
-      if (bytes == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Não consegui ler o PDF selecionado.'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-
       // Fecha o modal de anexo e mostra estado de processamento.
       if (mounted) Navigator.pop(context);
       setState(() => _isProcessingPdf = true);
 
-      // Converte a 1ª página do PDF em imagem para a IA conseguir "ler".
-      final imagemPagina = await PdfService.primeiraPaginaComoImagem(bytes);
+      var limiteAtingido = false;
+      var algumFalhou = false;
+      final novos = <_Anexo>[];
 
-      if (imagemPagina == null) {
-        if (mounted) {
-          setState(() => _isProcessingPdf = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'Não consegui converter o PDF. Verifique se o arquivo é válido.'),
-              backgroundColor: Colors.red,
-            ),
-          );
+      for (final arquivo in result.files) {
+        if (_anexos.length + novos.length >= _maxAnexos) {
+          limiteAtingido = true;
+          break;
         }
-        return;
+
+        // Bytes do PDF: em geral vêm em `bytes` (withData). Em mobile/desktop,
+        // caímos para o caminho do arquivo se necessário.
+        Uint8List? bytes = arquivo.bytes;
+        if (bytes == null && !kIsWeb && arquivo.path != null) {
+          bytes = await File(arquivo.path!).readAsBytes();
+        }
+        if (bytes == null) {
+          algumFalhou = true;
+          continue;
+        }
+
+        // Converte a 1ª página do PDF em imagem para a IA conseguir "ler".
+        final imagemPagina = await PdfService.primeiraPaginaComoImagem(bytes);
+        if (imagemPagina == null) {
+          algumFalhou = true;
+          continue;
+        }
+
+        final base = arquivo.name
+            .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+        novos.add(_Anexo(
+          nome: '$base.png',
+          nomeOriginal: arquivo.name,
+          bytes: imagemPagina,
+          contentType: 'image/png',
+          ehPdf: true,
+        ));
       }
 
+      if (!mounted) return;
       setState(() {
-        _selectedImage = null; // só um anexo por vez
-        _selectedPdfName = arquivo.name;
-        _selectedPdfImageBytes = imagemPagina;
+        _anexos.addAll(novos);
         _isProcessingPdf = false;
       });
+
+      if (algumFalhou || limiteAtingido) {
+        final avisos = <String>[
+          if (algumFalhou) 'Não consegui converter um ou mais PDFs.',
+          if (limiteAtingido) 'Máximo de $_maxAnexos arquivos por mensagem.',
+        ];
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(avisos.join(' ')),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _isProcessingPdf = false);
@@ -455,7 +578,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       child: _buildAttachmentOption(
                         icon: Icons.image_outlined,
                         titulo: 'Imagem',
-                        formatos: 'PNG, JPG, GIF',
+                        formatos: 'PNG, JPG (vários)',
                         onTap: () => _pickImage(ImageSource.gallery),
                       ),
                     ),
@@ -464,7 +587,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       child: _buildAttachmentOption(
                         icon: Icons.picture_as_pdf_outlined,
                         titulo: 'PDF',
-                        formatos: 'Documento .pdf',
+                        formatos: '.pdf (vários)',
                         onTap: _pickPdf,
                       ),
                     ),
@@ -598,9 +721,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       _messages
         ..clear()
         ..add(_mensagemBoasVindas());
-      _selectedImage = null;
-      _selectedPdfName = null;
-      _selectedPdfImageBytes = null;
+      _anexos.clear();
       _chatController.clear();
     });
   }
@@ -787,9 +908,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _sendMessage() async {
     final text = _chatController.text.trim();
-    final temImagem = _selectedImage != null;
-    final temPdf = _selectedPdfImageBytes != null;
-    if (text.isEmpty && !temImagem && !temPdf) return;
+    final temAnexos = _anexos.isNotEmpty;
+    final temPdf = _anexos.any((a) => a.ehPdf);
+    if (text.isEmpty && !temAnexos) return;
 
     // ── Interceptar fluxo da calculadora de fórmulas ──────────────
     if (_calcEstado == _CalcEstado.coletandoValor && text.isNotEmpty) {
@@ -801,89 +922,65 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return;
     }
 
-    String? uploadedImageUrl;
-    Uint8List? imageBytesToIA;
+    // Bytes de TODOS os anexos que irão para a IA, na ordem de seleção.
+    final List<Uint8List> bytesParaIA = [];
 
     final ehPrimeiraMensagemDoUsuario =
         !_messages.any((m) => m.sender == 'Você');
     final tituloInicial = ehPrimeiraMensagemDoUsuario
-        ? (text.isNotEmpty ? text : (temPdf ? 'PDF enviado' : 'Imagem enviada'))
+        ? (text.isNotEmpty
+            ? text
+            : (_anexos.length > 1
+                ? 'Arquivos enviados'
+                : (temPdf ? 'PDF enviado' : 'Imagem enviada')))
         : null;
 
     await _garantirConversa(tituloInicial: tituloInicial);
 
-    // Para imagem mostramos a prévia local na hora; para PDF a página
-    // renderizada só aparece na bolha depois do upload (vira URL).
-    final msgUsuario = ChatMessage(
-      sender: 'Você',
-      text: text,
-      imageUrl: temImagem ? _selectedImage?.path : null,
-    );
+    // Bolha de texto do usuário (se houver texto). Cada anexo aparece em
+    // uma bolha própria assim que o respectivo upload termina (vira URL).
+    if (text.isNotEmpty) {
+      final msgTexto = ChatMessage(sender: 'Você', text: text);
+      setState(() => _messages.add(msgTexto));
+      _scrollToBottom();
+      await _persistirMensagem(msgTexto);
+    }
 
-    final indiceMsgUsuario = _messages.length;
-    setState(() {
-      _messages.add(msgUsuario);
-      _isUploading = true;
-    });
-    _scrollToBottom();
+    setState(() => _isUploading = true);
 
-    if (temImagem || temPdf) {
+    if (temAnexos) {
       try {
-        // 1) Define os bytes do anexo (imagem direta OU 1ª página do PDF
-        //    já renderizada) e seus metadados.
-        late Uint8List bytesParaUpload;
-        late String nomeArquivo;
-        late String contentType;
-
-        if (temPdf) {
-          bytesParaUpload = _selectedPdfImageBytes!;
-          imageBytesToIA = _selectedPdfImageBytes;
-          final base = (_selectedPdfName ?? 'documento')
-              .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
-          nomeArquivo = '$base.png';
-          contentType = 'image/png';
-        } else {
-          if (kIsWeb) {
-            bytesParaUpload = await _selectedImage!.readAsBytes();
-          } else {
-            bytesParaUpload = await File(_selectedImage!.path).readAsBytes();
-          }
-          imageBytesToIA = bytesParaUpload;
-          nomeArquivo = _selectedImage!.name;
-          contentType = _contentTypeFromName(_selectedImage!.name);
-        }
-
-        // 2) Upload para o Firebase Storage.
         final userId = FirebaseAuth.instance.currentUser?.uid ?? 'anonimo';
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final storagePath = 'chats/$userId/${timestamp}_$nomeArquivo';
+        final anexosParaEnviar = List<_Anexo>.from(_anexos);
 
-        final ref = FirebaseStorage.instance.ref(storagePath);
-        final uploadTask = await ref.putData(
-          bytesParaUpload,
-          SettableMetadata(contentType: contentType),
-        );
-        uploadedImageUrl = await uploadTask.ref.getDownloadURL();
+        for (final anexo in anexosParaEnviar) {
+          bytesParaIA.add(anexo.bytes);
 
-        await FirebaseFirestore.instance.collection('chats').add({
-          'text': text,
-          'imageUrl': uploadedImageUrl,
-          'storagePath': storagePath,
-          'tipo': temPdf ? 'pdf' : 'imagem',
-          'senderId': userId,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
+          // Upload de cada anexo para o Firebase Storage.
+          final timestamp = DateTime.now().millisecondsSinceEpoch;
+          final storagePath = 'chats/$userId/${timestamp}_${anexo.nome}';
 
-        // 3) Se foi PDF, agora que temos a URL, mostramos a página
-        //    renderizada na bolha do usuário.
-        if (temPdf && mounted && indiceMsgUsuario < _messages.length) {
-          setState(() {
-            _messages[indiceMsgUsuario] = ChatMessage(
-              sender: 'Você',
-              text: text,
-              imageUrl: uploadedImageUrl,
-            );
+          final ref = FirebaseStorage.instance.ref(storagePath);
+          final uploadTask = await ref.putData(
+            anexo.bytes,
+            SettableMetadata(contentType: anexo.contentType),
+          );
+          final url = await uploadTask.ref.getDownloadURL();
+
+          await FirebaseFirestore.instance.collection('chats').add({
+            'text': text,
+            'imageUrl': url,
+            'storagePath': storagePath,
+            'tipo': anexo.ehPdf ? 'pdf' : 'imagem',
+            'senderId': userId,
+            'timestamp': FieldValue.serverTimestamp(),
           });
+
+          // Mostra o anexo na conversa assim que o upload termina.
+          final msgAnexo = ChatMessage(sender: 'Você', text: '', imageUrl: url);
+          if (mounted) setState(() => _messages.add(msgAnexo));
+          _scrollToBottom();
+          await _persistirMensagem(msgAnexo);
         }
       } on FirebaseException catch (e) {
         if (mounted) {
@@ -910,24 +1007,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       }
     }
 
-    final msgUsuarioPersistir = ChatMessage(
-      sender: 'Você',
-      text: text,
-      imageUrl: uploadedImageUrl ?? msgUsuario.imageUrl,
-    );
-    await _persistirMensagem(msgUsuarioPersistir);
-
     setState(() {
-      _selectedImage = null;
-      _selectedPdfName = null;
-      _selectedPdfImageBytes = null;
+      _anexos.clear();
       _isUploading = false;
       _isTyping = true;
       _chatController.clear();
     });
     _scrollToBottom();
 
-    if (imageBytesToIA != null) {
+    if (bytesParaIA.isNotEmpty) {
       try {
         final snapshot =
             await FirebaseFirestore.instance.collection('banco_imagens').get();
@@ -997,7 +1085,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         }
 
         final resultado = await IaService.analisarComContexto(
-          imagemUsuario: imageBytesToIA,
+          imagensUsuario: bytesParaIA,
           imagensBanco: imagensBanco,
           textoUsuario: text.isNotEmpty
               ? text
@@ -1192,6 +1280,39 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return;
     }
 
+    // Validação de opções restritas (ex.: M = 480/620, K = 40/60)
+    final opcoesPermitidas = variavelAtual.opcoes;
+    if (opcoesPermitidas != null && !opcoesPermitidas.contains(valor)) {
+      final permitidos = opcoesPermitidas.map(formatarNumero).join(' ou ');
+      final msgErro = ChatMessage(
+        sender: 'TOT',
+        text: 'Para ${variavelAtual.nome} os valores aceitos são apenas '
+            '$permitidos. Por favor, digite um deles. '
+            'Digite "cancelar" para sair.',
+      );
+      setState(() => _messages.add(msgErro));
+      _scrollToBottom();
+      await _persistirMensagem(msgErro);
+      return;
+    }
+
+    // Validação de mínimo exclusivo (ex.: A e B precisam ser > 0,6,
+    // senão a correção A − 0,6 geraria valor zero ou negativo)
+    final minExclusivo = variavelAtual.minExclusivo;
+    if (minExclusivo != null && valor <= minExclusivo) {
+      final msgErro = ChatMessage(
+        sender: 'TOT',
+        text: '${variavelAtual.nome} precisa ser maior que '
+            '${formatarNumero(minExclusivo)}, pois a fórmula subtrai '
+            '${formatarNumero(kDescontoBorda)} desse valor. '
+            'Informe um número maior ou digite "cancelar" para sair.',
+      );
+      setState(() => _messages.add(msgErro));
+      _scrollToBottom();
+      await _persistirMensagem(msgErro);
+      return;
+    }
+
     // Valor válido
     _valoresColetados[variavelAtual.nome] = valor;
     _indiceVariavelAtual++;
@@ -1216,8 +1337,33 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _finalizarCalculo() async {
     final formula = _formulaAtual!;
-    final resultado = formula.calcular(_valoresColetados);
-    final memoria = formula.memoriaCalculo(_valoresColetados, resultado);
+
+    // Rede de segurança: as validações já acontecem na coleta, mas se a
+    // fórmula lançar ArgumentError (ex.: chamada futura sem validação de
+    // UI), avisamos o usuário em vez de quebrar o app.
+    final double resultado;
+    final String memoria;
+    try {
+      resultado = formula.calcular(_valoresColetados);
+      memoria = formula.memoriaCalculo(_valoresColetados, resultado);
+    } on ArgumentError catch (e) {
+      final msgErro = ChatMessage(
+        sender: 'TOT',
+        text: 'Não foi possível concluir o cálculo: ${e.message}\n'
+            'O modo calculadora foi encerrado — ative-o novamente para '
+            'tentar com outros valores.',
+      );
+      setState(() {
+        _calcEstado = _CalcEstado.idle;
+        _formulaAtual = null;
+        _valoresColetados.clear();
+        _indiceVariavelAtual = 0;
+        _messages.add(msgErro);
+      });
+      _scrollToBottom();
+      await _persistirMensagem(msgErro);
+      return;
+    }
 
     final msgResultado = ChatMessage(
       sender: 'TOT',
@@ -1290,10 +1436,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 _buildSuggestions(),
               if (_isProcessingPdf)
                 _buildPdfProcessing()
-              else if (_selectedImage != null)
-                _buildImagePreview()
-              else if (_selectedPdfImageBytes != null)
-                _buildPdfPreview(),
+              else if (_anexos.isNotEmpty)
+                _buildAnexosPreview(),
               _buildInputArea(),
             ],
           ),
@@ -1637,8 +1781,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // ── Preview de imagem ─────────────────────
-  Widget _buildImagePreview() {
+  // ── Preview dos anexos (suporta vários) ───
+  Widget _buildAnexosPreview() {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       padding: const EdgeInsets.all(12),
@@ -1647,64 +1791,94 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.cardBorder),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              gradient: const LinearGradient(
-                colors: [AppColors.primaryDark, AppColors.crimson],
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: _selectedImage == null
-                  ? const Icon(Icons.image, color: AppColors.accent)
-                  : (kIsWeb
-                      ? Image.network(_selectedImage!.path, fit: BoxFit.cover)
-                      : Image.file(File(_selectedImage!.path),
-                          fit: BoxFit.cover)),
+          Text(
+            _anexos.length == 1
+                ? '1 arquivo pronto para enviar'
+                : '${_anexos.length} arquivos prontos para enviar',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 11,
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _selectedImage?.name ?? 'imagem',
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 13,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const Text(
-                  'Pronto para enviar',
-                  style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 78,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _anexos.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (context, i) => _buildAnexoChip(i),
             ),
           ),
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => setState(() => _selectedImage = null),
-              child: Container(
-                width: 28,
-                height: 28,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnexoChip(int indice) {
+    final anexo = _anexos[indice];
+    return SizedBox(
+      width: 72,
+      child: Column(
+        children: [
+          Stack(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
                 decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.cardBorder),
+                  borderRadius: BorderRadius.circular(8),
+                  gradient: const LinearGradient(
+                    colors: [AppColors.primaryDark, AppColors.crimson],
+                  ),
                 ),
-                child: const Icon(Icons.close,
-                    size: 14, color: AppColors.textSecondary),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(anexo.bytes, fit: BoxFit.cover),
+                ),
               ),
+              if (anexo.ehPdf)
+                const Positioned(
+                  left: 3,
+                  bottom: 3,
+                  child: Icon(Icons.picture_as_pdf,
+                      size: 14, color: AppColors.accent),
+                ),
+              // Botão para remover este anexo individualmente.
+              Positioned(
+                top: 2,
+                right: 2,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _anexos.removeAt(indice)),
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppColors.cardDark.withValues(alpha: 0.85),
+                        border: Border.all(color: AppColors.cardBorder),
+                      ),
+                      child: const Icon(Icons.close,
+                          size: 12, color: AppColors.textSecondary),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            anexo.nomeOriginal,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 10,
             ),
           ),
         ],
@@ -1739,91 +1913,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 13,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Preview de PDF ────────────────────────
-  Widget _buildPdfPreview() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.cardDark.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              gradient: const LinearGradient(
-                colors: [AppColors.primaryDark, AppColors.crimson],
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: _selectedPdfImageBytes != null
-                  ? Image.memory(_selectedPdfImageBytes!, fit: BoxFit.cover)
-                  : const Icon(Icons.picture_as_pdf, color: AppColors.accent),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.picture_as_pdf,
-                        size: 14, color: AppColors.accent),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        _selectedPdfName ?? 'documento.pdf',
-                        style: const TextStyle(
-                          color: AppColors.textPrimary,
-                          fontSize: 13,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                const Text(
-                  'PDF pronto para enviar (1ª página)',
-                  style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => setState(() {
-                _selectedPdfName = null;
-                _selectedPdfImageBytes = null;
-              }),
-              child: Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.cardBorder),
-                ),
-                child: const Icon(Icons.close,
-                    size: 14, color: AppColors.textSecondary),
               ),
             ),
           ),
@@ -3251,4 +3340,28 @@ class _ToggleSwitch extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Representa um anexo pronto para envio: uma imagem escolhida pelo usuário
+/// ou a 1ª página de um PDF já renderizada como PNG.
+class _Anexo {
+  /// Nome do arquivo usado no upload para o Storage (PDF vira "nome.png").
+  final String nome;
+
+  /// Nome original mostrado ao usuário (ex.: "manual.pdf").
+  final String nomeOriginal;
+
+  /// Bytes que vão para a IA e para o Firebase Storage.
+  final Uint8List bytes;
+
+  final String contentType;
+  final bool ehPdf;
+
+  _Anexo({
+    required this.nome,
+    required this.bytes,
+    required this.contentType,
+    this.ehPdf = false,
+    String? nomeOriginal,
+  }) : nomeOriginal = nomeOriginal ?? nome;
 }
